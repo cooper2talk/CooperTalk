@@ -21,7 +21,7 @@
 
 ## Temporary hostname before buying a domain
 
-For the current server IP, use `34-130-230-72.sslip.io`. It resolves to the VM without a DNS purchase and Caddy can obtain a public HTTPS certificate for it. Reserve the GCP address before using the system beyond a test; changing the address changes this hostname and breaks Twilio and Meta webhooks.
+For the current server IP, use `34-130-230-27.sslip.io`. It resolves to the VM without a DNS purchase and Caddy can obtain a public HTTPS certificate for it. Reserve the GCP address before using the system beyond a test; changing the address changes this hostname and breaks Twilio and Meta webhooks.
 
 Open GCP ingress TCP 80 and TCP 443 to the VM. Keep TCP 22 restricted to the administrator's current IP address.
 
@@ -31,8 +31,8 @@ On the VM, clone this repository to `/opt/cooper2talk` and create `/opt/cooper2t
 
 ```dotenv
 NODE_ENV=production
-PUBLIC_HOST=34-130-230-72.sslip.io
-PUBLIC_BASE_URL=https://34-130-230-72.sslip.io
+PUBLIC_HOST=34-130-230-27.sslip.io
+PUBLIC_BASE_URL=https://34-130-230-27.sslip.io
 POSTGRES_PASSWORD=a-long-url-safe-password
 DATABASE_URL=postgres://cooper:a-long-url-safe-password@postgres:5432/cooper2talk
 SESSION_SECRET=a-long-random-secret
@@ -46,8 +46,9 @@ TRANSCRIPT_RETENTION_DAYS=30
 Add provider values directly on the VM; never commit them. Start Cooper2Talk with:
 
 ```bash
-sudo docker compose --env-file .env -f deploy/production-compose.yml up -d --build
-curl -fsS https://34-130-230-72.sslip.io/health
+bash deploy/render-runtime-env.sh
+sudo docker compose --env-file .env.runtime -f deploy/production-compose.yml up -d --build
+curl -fsS https://34-130-230-27.sslip.io/health
 ```
 
 `POSTGRES_PASSWORD` must be URL-safe because it is inserted into the container database URL. Generate a long value containing letters, numbers, hyphens, and underscores only.
