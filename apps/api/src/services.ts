@@ -7,7 +7,7 @@ export class DograhClient {
   constructor(private readonly config: Config) {}
   async inject(call: Call, text: string, instructionId: string = randomUUID()) {
     if (!this.config.DOGRAH_BASE_URL || !this.config.DOGRAH_API_KEY) return { accepted: true, instructionId, simulated: true };
-    const response = await fetch(`${this.config.DOGRAH_BASE_URL}/api/v1/cooper/calls/${encodeURIComponent(call.dograhRunId)}/operator-instructions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${this.config.DOGRAH_API_KEY}`, "idempotency-key": instructionId }, body: JSON.stringify({ instructionId, text, source: "cooper2talk" }) });
+    const response = await fetch(`${this.config.DOGRAH_BASE_URL}/api/v1/cooper/calls/${encodeURIComponent(call.dograhRunId)}/operator-instructions`, { method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${this.config.DOGRAH_API_KEY}`, "x-cooper-instruction-secret": this.config.DOGRAH_EVENT_SECRET, "idempotency-key": instructionId }, body: JSON.stringify({ instructionId, text, source: "cooper2talk" }) });
     if (!response.ok) throw new Error(`Dograh injection failed (${response.status})`);
     return { accepted: true, instructionId, simulated: false };
   }

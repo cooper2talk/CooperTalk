@@ -86,7 +86,8 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
   app.get("/api/calls/:callId", async (request) => { await requireUser(request); const call = await getCall((request.params as any).callId); return { call, transcript: await repo.listTranscript(call.id) }; });
   app.post("/api/calls/:callId/injections", async (request) => {
     const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); if (call.status !== "active") fail(409, "Call is not active");
-    const { text } = injectionSchema.parse(request.body); const instructionId = randomUUID();
+    const injectionBody = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
+    const { text } = injectionSchema.parse(injectionBody); const instructionId = randomUUID();
     const message = { id: randomUUID(), callId: call.id, speaker: "operator" as const, text, source: "operator_console" as const, occurredAt: new Date().toISOString() };
     await repo.addTranscript(message); await repo.writeAudit("call.inject", p.user.id, call.id, { instructionId }); broadcast("transcript.message", message);
     try { const result = await clients.dograh.inject(call, text, instructionId); broadcast("injection.status", { callId: call.id, instructionId, status: "accepted" }); return replyStatus(202, result); }
