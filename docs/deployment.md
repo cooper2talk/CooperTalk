@@ -8,10 +8,22 @@
 - Store every value from `.env.example` in GCP Secret Manager. Generate runtime `.env` files with mode `0600`; do not place secrets in images or Git.
 - Deploy the pinned Dograh source image with the Cooper2Talk extension. Point `DOGRAH_EVENT_URL` to `https://YOUR_DOMAIN/internal/dograh/events`.
 
-## External setup required
+## Telnyx direct-call pilot
 
-- Twilio: add the Canadian number to Dograh's Twilio configuration and assign the inbound workflow. Dograh updates the Voice URL to `https://DOGRAH_DOMAIN/api/v1/telephony/inbound/run` using POST.
-- Carrier: enable conditional forwarding (busy/no-answer/unreachable) from the personal mobile number to the Twilio number.
+The existing US number `+14095060390` is for direct technical testing only. Do not configure Canadian mobile forwarding to it. Keep the Twilio configuration intact as rollback.
+
+1. In Telnyx, create an API key with Call Control access and copy the account webhook public key. Never put the API key in Git or chat.
+2. In GCP Secret Manager, create `cooper-telnyx-api-key` and grant `cooper2talk-runtime` the existing Secret Manager access role. Run `bash deploy/render-runtime-env.sh` and `bash deploy/render-dograh-runtime-env.sh` on the VM, then restart the relevant containers.
+3. In Dograh, add a Telnyx telephony configuration. Set its API-key field to `cooper2talk-managed` (the deployment resolves this marker inside the container), paste the Telnyx webhook public key, leave the Call Control App ID blank, and add `+14095060390`. Dograh will create/configure its Call Control application.
+4. Bind `+14095060390` to that Call Control application and select the receptionist workflow as inbound. Confirm the Telnyx number is voice-enabled before placing a test call.
+5. Place a direct call only. Verify a signed inbound event, live transcript, fixed Emma voice, console injection, transfer and hang-up. Stop if the Telnyx pretrial blocks Call Control; do not fund it just to proceed.
+
+The API records `provider`, `provider_call_id`, `call_leg_id`, and `call_session_id`, so Telnyx Call Control identifiers do not get mistaken for Twilio SIDs. It stores transcripts and call metadata only; recordings remain disabled.
+
+## Other external setup required
+
+- Twilio (rollback): keep its configuration and any number assignment intact, but do not use it for this pilot.
+- Production carrier forwarding: after acquiring or porting a Canadian Telnyx voice number, enable conditional forwarding (busy/no-answer/unreachable) to that Canadian number.
 - Meta: create a WhatsApp Cloud API app, register its webhook at `https://YOUR_DOMAIN/webhooks/whatsapp`, subscribe to messages and statuses, and approve the configured alert template.
 
 ## Operational checks

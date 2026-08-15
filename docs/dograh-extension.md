@@ -7,10 +7,10 @@ Cooper2Talk keeps Dograh pinned to a reviewed release and adds a small server-si
 POST signed JSON to `DOGRAH_EVENT_URL` using `X-Cooper-Signature: sha256=<hex HMAC of raw body>`:
 
 ```json
-{"id":"uuid","type":"transcript.final","occurredAt":"2026-08-15T00:00:00.000Z","call":{"dograhRunId":"42","twilioCallSid":"CA...","from":"+1416...","to":"+1737...","forwardedFrom":null},"payload":{"speaker":"caller","text":"Are you open?"}}
+{"id":"uuid","type":"transcript.final","occurredAt":"2026-08-15T00:00:00.000Z","call":{"dograhRunId":"42","provider":"telnyx","providerCallId":"v3:call-control-id","callLegId":"v3:call-leg-id","callSessionId":"v3:call-session-id","from":"+1409...","to":"+1409...","forwardedFrom":null},"payload":{"speaker":"caller","text":"Are you open?"}}
 ```
 
-Supported types are `call.started`, `transcript.final`, `call.interrupted`, and `call.ended`. The extension normalizes numbers and treats forwarding headers as optional metadata.
+Supported types are `call.started`, `transcript.final`, `call.interrupted`, and `call.ended`. The extension normalizes numbers and treats forwarding headers as optional metadata. `provider`, `providerCallId`, `callLegId`, and `callSessionId` are provider-neutral fields; legacy `twilioCallSid` and `streamSid` remain accepted only for existing Twilio calls.
 
 ## Operator injection
 

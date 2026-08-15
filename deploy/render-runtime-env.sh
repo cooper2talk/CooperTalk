@@ -49,6 +49,13 @@ secret_value() {
   gcloud secrets versions access latest --project="$project" --secret="$1"
 }
 
+optional_secret_value() {
+  local secret_name="$1"
+  if gcloud secrets describe "$secret_name" --project="$project" >/dev/null 2>&1; then
+    secret_value "$secret_name"
+  fi
+}
+
 set_value NODE_ENV production
 set_value PUBLIC_HOST "${PUBLIC_HOST:-34-130-230-27.sslip.io}"
 set_value PUBLIC_BASE_URL "https://${PUBLIC_HOST:-34-130-230-27.sslip.io}"
@@ -63,5 +70,6 @@ set_value GROQ_API_KEY "$(secret_value cooper-groq-api-key)"
 set_value RUMIK_API_KEY "$(secret_value cooper-rumik-api-key)"
 set_value TWILIO_ACCOUNT_SID "$(secret_value cooper-twilio-account-sid)"
 set_value TWILIO_AUTH_TOKEN "$(secret_value cooper-twilio-auth-token)"
+set_value TELNYX_API_KEY "$(optional_secret_value cooper-telnyx-api-key)"
 
 echo "Updated $output with mode 600."

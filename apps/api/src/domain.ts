@@ -2,6 +2,7 @@ export type Role = "admin" | "supervisor" | "viewer";
 export type CallStatus = "active" | "completed" | "failed" | "transferred";
 export type EventType = "call.started" | "transcript.final" | "call.interrupted" | "call.ended";
 export type Speaker = "caller" | "assistant" | "operator";
+export type TelephonyProvider = "twilio" | "telnyx";
 
 export interface User {
   id: string;
@@ -21,7 +22,13 @@ export interface Session {
 export interface Call {
   id: string;
   dograhRunId: string;
+  provider: TelephonyProvider;
+  providerCallId?: string;
+  callLegId?: string;
+  callSessionId?: string;
+  /** @deprecated Kept only to read existing Twilio call records. */
   twilioCallSid?: string;
+  /** @deprecated Kept only to read existing Twilio call records. */
   streamSid?: string;
   fromNumber?: string;
   toNumber?: string;
@@ -73,6 +80,10 @@ export interface DograhEvent {
   occurredAt: string;
   call: {
     dograhRunId: string;
+    provider?: TelephonyProvider;
+    providerCallId?: string;
+    callLegId?: string;
+    callSessionId?: string;
     twilioCallSid?: string;
     streamSid?: string;
     from?: string;

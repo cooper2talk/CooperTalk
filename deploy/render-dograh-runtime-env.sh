@@ -33,3 +33,7 @@ put_secret GROQ_API_KEY cooper-groq-api-key
 put_secret RUMIK_API_KEY cooper-rumik-api-key
 put_secret TWILIO_ACCOUNT_SID cooper-twilio-account-sid
 put_secret TWILIO_AUTH_TOKEN cooper-twilio-auth-token
+
+if gcloud secrets describe cooper-telnyx-api-key >/dev/null 2>&1; then
+  put_secret TELNYX_API_KEY cooper-telnyx-api-key
+fi

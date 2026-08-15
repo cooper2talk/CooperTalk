@@ -12,7 +12,7 @@ import type { Config } from "./config.js";
 import { validSignature } from "./crypto.js";
 import type { BusinessConfig, Call, DograhEvent, Repository, Role, User } from "./domain.js";
 import { normalizeCanadianNumber } from "./phone.js";
-import { CallService, DograhClient, OutboxWorker, stableInstructionId, TwilioClient, WhatsAppClient } from "./services.js";
+import { CallService, DograhClient, OutboxWorker, stableInstructionId, TelephonyClient, WhatsAppClient } from "./services.js";
 
 declare module "fastify" { interface FastifyRequest { rawBody?: string | Buffer } }
 
@@ -23,16 +23,16 @@ const operatorSchema = z.object({ email: z.string().email(), password: z.string(
 const businessSchema = z.object({ name: z.string().trim().min(1).max(120), greeting: z.string().trim().min(1).max(1000), timezone: z.string().trim().min(1).max(100), businessHours: z.record(z.string().max(120)), systemPrompt: z.string().trim().min(1).max(12000), voice: z.string().trim().min(1).max(120), transferNumber: z.string().optional() });
 const dograhEventSchema = z.object({
   id: z.string().min(1), type: z.enum(["call.started", "transcript.final", "call.interrupted", "call.ended"]), occurredAt: z.string().datetime(),
-  call: z.object({ dograhRunId: z.string().min(1), twilioCallSid: z.string().optional(), streamSid: z.string().optional(), from: z.string().optional(), to: z.string().optional(), forwardedFrom: z.string().optional(), originalCaller: z.string().optional(), metadata: z.record(z.unknown()).optional() }),
+  call: z.object({ dograhRunId: z.string().min(1), provider: z.enum(["twilio", "telnyx"]).optional(), providerCallId: z.string().optional(), callLegId: z.string().optional(), callSessionId: z.string().optional(), twilioCallSid: z.string().optional(), streamSid: z.string().optional(), from: z.string().optional(), to: z.string().optional(), forwardedFrom: z.string().optional(), originalCaller: z.string().optional(), metadata: z.record(z.unknown()).optional() }),
   payload: z.object({ speaker: z.enum(["caller", "assistant", "operator"]).optional(), text: z.string().optional(), interrupted: z.boolean().optional(), costUsd: z.number().nonnegative().optional() }).optional()
 });
 
 type Principal = { user: User; sessionId: string; csrfToken: string };
-type DependencyOverrides = { dograh?: DograhClient; twilio?: TwilioClient; whatsapp?: WhatsAppClient };
+type DependencyOverrides = { dograh?: DograhClient; telephony?: TelephonyClient; whatsapp?: WhatsAppClient };
 
 export async function createApp(repo: Repository, config: Config, overrides: DependencyOverrides = {}) {
   const app = Fastify({ logger: config.NODE_ENV !== "test", trustProxy: config.NODE_ENV === "production" });
-  const clients = { dograh: overrides.dograh ?? new DograhClient(config), twilio: overrides.twilio ?? new TwilioClient(config), whatsapp: overrides.whatsapp ?? new WhatsAppClient(config) };
+  const clients = { dograh: overrides.dograh ?? new DograhClient(config), telephony: overrides.telephony ?? new TelephonyClient(config), whatsapp: overrides.whatsapp ?? new WhatsAppClient(config) };
   const sockets = new Set<any>();
   const broadcast = (event: string, payload: unknown) => {
     const data = JSON.stringify({ event, payload });
@@ -64,7 +64,7 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
   }
   async function getCall(callId: string) { const call = await repo.getCall(callId); if (!call) fail(404, "Call not found"); return call; }
 
-  app.get("/health", async () => ({ status: "ok", service: "cooper2talk", timestamp: new Date().toISOString(), configured: { dograh: Boolean(config.DOGRAH_BASE_URL && config.DOGRAH_API_KEY), twilio: Boolean(config.TWILIO_ACCOUNT_SID && config.TWILIO_AUTH_TOKEN), whatsapp: Boolean(config.WHATSAPP_ACCESS_TOKEN && config.WHATSAPP_PHONE_NUMBER_ID), database: Boolean(config.DATABASE_URL) } }));
+  app.get("/health", async () => ({ status: "ok", service: "cooper2talk", timestamp: new Date().toISOString(), configured: { dograh: Boolean(config.DOGRAH_BASE_URL && config.DOGRAH_API_KEY), twilio: Boolean(config.TWILIO_ACCOUNT_SID && config.TWILIO_AUTH_TOKEN), telnyx: Boolean(config.TELNYX_API_KEY), whatsapp: Boolean(config.WHATSAPP_ACCESS_TOKEN && config.WHATSAPP_PHONE_NUMBER_ID), database: Boolean(config.DATABASE_URL) } }));
 
   app.post("/api/auth/login", async (request, reply) => {
     const body = loginSchema.parse(request.body);
@@ -92,8 +92,8 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
     try { const result = await clients.dograh.inject(call, text, instructionId); broadcast("injection.status", { callId: call.id, instructionId, status: "accepted" }); return replyStatus(202, result); }
     catch (error) { broadcast("injection.status", { callId: call.id, instructionId, status: "failed" }); throw error; }
   });
-  app.post("/api/calls/:callId/transfer", async (request) => { const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); const { destination } = transferSchema.parse(request.body); const result = await clients.twilio.transfer(call, destination); call.status = "transferred"; await repo.saveCall(call); await repo.writeAudit("call.transfer", p.user.id, call.id, { destination: result.destination }); broadcast("call.updated", call); return result; });
-  app.post("/api/calls/:callId/end", async (request) => { const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); const result = await clients.twilio.end(call); await repo.writeAudit("call.end", p.user.id, call.id, {}); return result; });
+  app.post("/api/calls/:callId/transfer", async (request) => { const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); const { destination } = transferSchema.parse(request.body); const result = await clients.telephony.transfer(call, destination); call.status = "transferred"; await repo.saveCall(call); await repo.writeAudit("call.transfer", p.user.id, call.id, { provider: call.provider, destination: result.destination }); broadcast("call.updated", call); return result; });
+  app.post("/api/calls/:callId/end", async (request) => { const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); const result = await clients.telephony.end(call); await repo.writeAudit("call.end", p.user.id, call.id, { provider: call.provider }); return result; });
 
   app.post("/internal/dograh/events", { config: { rawBody: true } }, async (request) => {
     const raw = request.rawBody;

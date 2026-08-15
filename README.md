@@ -1,6 +1,6 @@
 # Cooper2Talk
 
-Canadian AI receptionist demo: Twilio and Dograh provide the phone conversation; Cooper2Talk provides secure operator control, transcript retention, and WhatsApp injection.
+Canadian AI receptionist demo: Dograh connects Telnyx for the direct-call pilot and retains Twilio as rollback; Cooper2Talk provides secure operator control, transcript retention, and WhatsApp injection.
 
 ## Local development
 

@@ -18,6 +18,11 @@ Apply `managed-secrets-v1.45.0.patch` after the Rumik patch. It keeps the
 `cooper2talk-managed` marker in Dograh's database and replaces it only inside
 the running API from `DEEPGRAM_API_KEY`, `GROQ_API_KEY`, and `RUMIK_API_KEY`.
 
+Apply `telnyx-managed-secret-v1.45.0.patch` after those patches when enabling
+the Telnyx pilot. Its Telnyx configuration also stores only the
+`cooper2talk-managed` marker; the API resolves the real key from
+`TELNYX_API_KEY` at runtime.
+
 Compatibility checks executed against the deployed release:
 
 - The Rumik provider parses from Dograh's discriminated `TTSConfig` union.
