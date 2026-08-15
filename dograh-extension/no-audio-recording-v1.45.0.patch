@@ -1,0 +1,146 @@
+diff --git a/api/services/pipecat/event_handlers.py b/api/services/pipecat/event_handlers.py
+index f9aa776..ca0ec52 100644
+--- a/api/services/pipecat/event_handlers.py
++++ b/api/services/pipecat/event_handlers.py
+@@ -172,7 +172,6 @@ def register_event_handlers(
+     @transport.event_handler("on_client_connected")
+     async def on_client_connected(_transport, _participant):
+         logger.debug("In on_client_connected callback handler")
+-        await audio_buffer.start_recording()
+         ready_state["client_connected"] = True
+         await maybe_trigger_initial_response()
+ 
+@@ -184,9 +183,6 @@ def register_event_handlers(
+             f"In on_client_disconnected callback handler. Call disposed: {call_disposed}"
+         )
+ 
+-        # Stop recordings
+-        await audio_buffer.stop_recording()
+-
+         await engine.end_call_with_reason(
+             EndTaskReason.USER_HANGUP.value, abort_immediately=True
+         )
+@@ -245,9 +241,6 @@ def register_event_handlers(
+ 
+         workflow_run = await db_client.get_workflow_run_by_id(workflow_run_id)
+ 
+-        # Stop recordings
+-        await audio_buffer.stop_recording()
+-
+         gathered_context = await engine.get_gathered_context()
+ 
+         # Add trace URL if available (must be done before conversation tracing ends)
+@@ -381,30 +374,9 @@ def register_event_handlers(
+             except Exception as e:
+                 logger.error(f"Error saving workflow run logs: {e}", exc_info=True)
+ 
+-        # Upload artifacts straight from the in-memory buffers so nothing has
+-        # to cross a process/host boundary via temp files. Must complete
+-        # before the completion job is enqueued so QA and webhooks see the
+-        # artifacts in storage.
++        # Persist the text transcript only. Cooper2Talk deliberately does not
++        # record or store caller, assistant, or mixed audio.
+         try:
+-            mixed_audio_wav = None
+-            user_audio_wav = None
+-            bot_audio_wav = None
+-
+-            if not in_memory_audio_buffers.mixed.is_empty:
+-                mixed_audio_wav = await in_memory_audio_buffers.mixed.to_wav_bytes()
+-            else:
+-                logger.debug("Audio buffer is empty, skipping upload")
+-
+-            if not in_memory_audio_buffers.user.is_empty:
+-                user_audio_wav = await in_memory_audio_buffers.user.to_wav_bytes()
+-            else:
+-                logger.debug("User audio buffer is empty, skipping upload")
+-
+-            if not in_memory_audio_buffers.bot.is_empty:
+-                bot_audio_wav = await in_memory_audio_buffers.bot.to_wav_bytes()
+-            else:
+-                logger.debug("Bot audio buffer is empty, skipping upload")
+-
+             transcript_text = in_memory_logs_buffer.generate_transcript_text(
+                 include_end_timestamps=include_transcript_end_timestamps
+             )
+@@ -413,9 +385,6 @@ def register_event_handlers(
+ 
+             await upload_workflow_run_artifacts(
+                 workflow_run_id,
+-                mixed_audio_wav=mixed_audio_wav,
+-                user_audio_wav=user_audio_wav,
+-                bot_audio_wav=bot_audio_wav,
+                 transcript_text=transcript_text,
+             )
+         except Exception as e:
+diff --git a/api/services/workflow_run_artifacts.py b/api/services/workflow_run_artifacts.py
+index e61c47e..3b902a6 100644
+--- a/api/services/workflow_run_artifacts.py
++++ b/api/services/workflow_run_artifacts.py
+@@ -51,63 +51,13 @@ async def upload_workflow_run_artifacts(
+     bot_audio_wav: bytes | None = None,
+     transcript_text: str | None = None,
+ ) -> None:
+-    """Upload call artifacts to object storage and persist their metadata.
++    """Upload transcript artifacts only.
+ 
+-    Each artifact is uploaded independently; a failure is logged and the
+-    remaining artifacts are still attempted.
++    Audio arguments are intentionally ignored. Cooper2Talk retains call
++    metadata and transcripts only; it must never persist call audio.
+     """
+     storage_backend = get_current_storage_backend()
+ 
+-    recordings_metadata: dict[str, dict] = {}
+-
+-    if mixed_audio_wav:
+-        recording_url = f"recordings/{workflow_run_id}.wav"
+-        logger.info(
+-            f"Uploading mixed audio to {storage_backend.name} - workflow_run_id: {workflow_run_id}"
+-        )
+-        if await _upload_bytes(
+-            workflow_run_id, mixed_audio_wav, recording_url, "mixed audio"
+-        ):
+-            recordings_metadata["mixed"] = _recording_metadata(
+-                recording_url, storage_backend.value, "mixed"
+-            )
+-            await db_client.update_workflow_run(
+-                run_id=workflow_run_id,
+-                recording_url=recording_url,
+-                storage_backend=storage_backend.value,
+-            )
+-
+-    if user_audio_wav:
+-        user_recording_url = f"recordings/{workflow_run_id}/user.wav"
+-        logger.info(
+-            f"Uploading user audio to {storage_backend.name} - workflow_run_id: {workflow_run_id}"
+-        )
+-        if await _upload_bytes(
+-            workflow_run_id, user_audio_wav, user_recording_url, "user audio"
+-        ):
+-            recordings_metadata["user"] = _recording_metadata(
+-                user_recording_url, storage_backend.value, "user"
+-            )
+-
+-    if bot_audio_wav:
+-        bot_recording_url = f"recordings/{workflow_run_id}/bot.wav"
+-        logger.info(
+-            f"Uploading bot audio to {storage_backend.name} - workflow_run_id: {workflow_run_id}"
+-        )
+-        if await _upload_bytes(
+-            workflow_run_id, bot_audio_wav, bot_recording_url, "bot audio"
+-        ):
+-            recordings_metadata["bot"] = _recording_metadata(
+-                bot_recording_url, storage_backend.value, "bot"
+-            )
+-
+-    if recordings_metadata:
+-        await db_client.update_workflow_run(
+-            run_id=workflow_run_id,
+-            storage_backend=storage_backend.value,
+-            extra={"recordings": recordings_metadata},
+-        )
+-
+     if transcript_text:
+         transcript_url = f"transcripts/{workflow_run_id}.txt"
+         logger.info(

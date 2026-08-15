@@ -24,6 +24,10 @@ the Telnyx pilot. Its Telnyx configuration also stores only the
 `TELNYX_API_KEY` at runtime, including while Dograh auto-creates the Call
 Control Application.
 
+Apply `no-audio-recording-v1.45.0.patch` after the provider patches. It
+disables audio capture and object-storage uploads, preserving only the text
+transcript and call metadata required by Cooper2Talk's retention policy.
+
 Compatibility checks executed against the deployed release:
 
 - The Rumik provider parses from Dograh's discriminated `TTSConfig` union.
@@ -31,3 +35,5 @@ Compatibility checks executed against the deployed release:
 - The factory creates `RumikTTSService` with the Muga default without making a
   provider request.
 - The Dograh API health endpoint stays healthy after rebuilding.
+- Audio recordings are not created or uploaded; transcript upload remains
+  available.
