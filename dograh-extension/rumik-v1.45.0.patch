@@ -1,0 +1,153 @@
+diff --git a/api/Dockerfile b/api/Dockerfile
+index c15c54c..3f54fd6 100644
+--- a/api/Dockerfile
++++ b/api/Dockerfile
+@@ -38,6 +38,7 @@ RUN --mount=type=bind,source=api/requirements.txt,target=/tmp/req.txt \
+ RUN --mount=type=bind,source=pipecat,target=/tmp/pipecat,rw \
+     --mount=type=cache,target=/root/.cache/uv \
+     uv pip install '/tmp/pipecat[cartesia,deepgram,openai,elevenlabs,groq,google,azure,sarvam,soundfile,silero,webrtc,speechmatics,openrouter,camb,mcp,inworld,smallest]' \
++ && uv pip install --no-deps 'pipecat-rumik @ https://files.pythonhosted.org/packages/6b/9b/41b5c0f192bbd408bd46b25fd13c880fbcefbd8a3ea33c38069ea65e37be/pipecat_rumik-0.1.4-py3-none-any.whl#sha256=0c1f7e51dab77152016fa78d0af678e99081db5fe6ac874f97b331d96f2f7cc3' \
+  && uv pip uninstall opencv-python \
+  && uv pip install opencv-python-headless \
+  && python -c "import nltk; nltk.download('punkt_tab', download_dir='/opt/venv/nltk_data', quiet=True)"
+diff --git a/api/services/configuration/check_validity.py b/api/services/configuration/check_validity.py
+index 44c90eb..0913047 100644
+--- a/api/services/configuration/check_validity.py
++++ b/api/services/configuration/check_validity.py
+@@ -64,6 +64,7 @@ class UserConfigurationValidator:
+             ServiceProviders.ASSEMBLYAI.value: self._check_assemblyai_api_key,
+             ServiceProviders.GLADIA.value: self._check_gladia_api_key,
+             ServiceProviders.RIME.value: self._check_rime_api_key,
++            ServiceProviders.RUMIK.value: self._check_rumik_api_key,
+             ServiceProviders.MINIMAX.value: self._check_minimax_api_key,
+             ServiceProviders.SMALLEST.value: self._check_smallest_api_key,
+             ServiceProviders.XAI.value: self._check_xai_api_key,
+@@ -493,6 +494,11 @@ class UserConfigurationValidator:
+     def _check_rime_api_key(self, model: str, api_key: str) -> bool:
+         return True
+ 
++    def _check_rumik_api_key(self, model: str, api_key: str) -> bool:
++        # Rumik validates the credential during the WebSocket handshake. Avoid
++        # generating billable speech while the configuration form is saved.
++        return bool(api_key.strip())
++
+     def _check_minimax_api_key(self, model: str, api_key: str) -> bool:
+         return True
+ 
+diff --git a/api/services/configuration/registry.py b/api/services/configuration/registry.py
+index 98d793f..aab3e7a 100644
+--- a/api/services/configuration/registry.py
++++ b/api/services/configuration/registry.py
+@@ -87,6 +87,7 @@ class ServiceProviders(str, Enum):
+     ASSEMBLYAI = "assemblyai"
+     GLADIA = "gladia"
+     RIME = "rime"
++    RUMIK = "rumik"
+     MINIMAX = "minimax"
+     GOOGLE_VERTEX = "google_vertex"
+     OPENAI_REALTIME = "openai_realtime"
+@@ -119,6 +120,7 @@ class BaseServiceConfiguration(BaseModel):
+         ServiceProviders.ASSEMBLYAI,
+         ServiceProviders.GLADIA,
+         ServiceProviders.RIME,
++        ServiceProviders.RUMIK,
+         ServiceProviders.MINIMAX,
+         ServiceProviders.GOOGLE_VERTEX,
+         ServiceProviders.OPENAI_REALTIME,
+@@ -326,6 +328,11 @@ INWORLD_PROVIDER_MODEL_CONFIG = provider_model_config(
+ SARVAM_PROVIDER_MODEL_CONFIG = provider_model_config("Sarvam")
+ CAMB_PROVIDER_MODEL_CONFIG = provider_model_config("Camb.ai")
+ RIME_PROVIDER_MODEL_CONFIG = provider_model_config("Rime")
++RUMIK_PROVIDER_MODEL_CONFIG = provider_model_config(
++    "Rumik",
++    description="Rumik AI interruption-aware streaming text-to-speech.",
++    provider_docs_url="https://playground.rumik.ai/docs",
++)
+ GOOGLE_CLOUD_PROVIDER_MODEL_CONFIG = provider_model_config("Google Cloud")
+ SPEECHMATICS_PROVIDER_MODEL_CONFIG = provider_model_config("Speechmatics")
+ ASSEMBLYAI_PROVIDER_MODEL_CONFIG = provider_model_config("AssemblyAI")
+@@ -1241,6 +1248,38 @@ class RimeTTSConfiguration(BaseTTSConfiguration):
+     )
+ 
+ 
++RUMIK_TTS_MODELS = ["muga", "mulberry"]
++
++
++@register_tts
++class RumikTTSConfiguration(BaseTTSConfiguration):
++    model_config = RUMIK_PROVIDER_MODEL_CONFIG
++    provider: Literal[ServiceProviders.RUMIK] = ServiceProviders.RUMIK
++    model: str = Field(
++        default="muga",
++        description="Rumik TTS model.",
++        json_schema_extra={"examples": RUMIK_TTS_MODELS, "allow_custom_input": True},
++    )
++    voice: str | None = Field(
++        default=None,
++        description="Optional Rumik preset speaker voice (for example, speaker_1).",
++    )
++    gateway_url: str = Field(
++        default="https://silk-api.rumik.ai",
++        description="Rumik gateway URL supplied for this Rumik account.",
++    )
++    description: str | None = Field(
++        default=None,
++        description="Optional expressive voice description for Rumik Mulberry.",
++    )
++    f0_up_key: int | None = Field(
++        default=None,
++        ge=-12,
++        le=12,
++        description="Optional Rumik preset-speaker pitch shift in semitones.",
++    )
++
++
+ SPEACHES_TTS_MODELS = ["hexgrad/Kokoro-82M"]
+ 
+ 
+@@ -1471,6 +1510,7 @@ TTSConfig = Annotated[
+         SarvamTTSConfiguration,
+         CambTTSConfiguration,
+         RimeTTSConfiguration,
++        RumikTTSConfiguration,
+         SpeachesTTSConfiguration,
+         MiniMaxTTSConfiguration,
+         AzureSpeechTTSConfiguration,
+diff --git a/api/services/pipecat/service_factory.py b/api/services/pipecat/service_factory.py
+index d1a264f..af95310 100644
+--- a/api/services/pipecat/service_factory.py
++++ b/api/services/pipecat/service_factory.py
+@@ -81,6 +81,7 @@ from pipecat.services.openai.stt import (
+ )
+ from pipecat.services.openai.tts import OpenAITTSService, OpenAITTSSettings
+ from pipecat.services.openrouter.llm import OpenRouterLLMService, OpenRouterLLMSettings
++from pipecat_rumik import RumikTTSService, RumikTTSSettings
+ from pipecat.services.rime.tts import RimeTTSService, RimeTTSSettings
+ from pipecat.services.sarvam.llm import SarvamLLMService, SarvamLLMSettings
+ from pipecat.services.sarvam.stt import SarvamSTTService, SarvamSTTSettings
+@@ -755,6 +756,25 @@ def create_tts_service(
+             skip_aggregator_types=["recording_router", "recording"],
+             silence_time_s=1.0,
+         )
++    elif user_config.tts.provider == ServiceProviders.RUMIK.value:
++        _validate_runtime_service_url(user_config.tts.gateway_url, "gateway_url")
++        return RumikTTSService(
++            api_key=user_config.tts.api_key,
++            gateway_url=user_config.tts.gateway_url,
++            settings=RumikTTSSettings(
++                model=user_config.tts.model,
++                voice=user_config.tts.voice,
++                description=user_config.tts.description,
++                f0_up_key=user_config.tts.f0_up_key,
++            ),
++            sample_rate=24000,
++            # A receptionist must begin the revised answer as soon as its first
++            # sentence is available after an interruption or operator update.
++            full_response_aggregation=False,
++            text_filters=[xml_function_tag_filter],
++            skip_aggregator_types=["recording_router", "recording"],
++            silence_time_s=1.0,
++        )
+     elif user_config.tts.provider == ServiceProviders.SARVAM.value:
+         # Map Sarvam language code to pipecat Language enum for TTS
+         language_mapping = {
