@@ -25,6 +25,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    networks:
+      - default
+      - dograh_app-network
 
   caddy:
     image: caddy:2.10.2-alpine

@@ -1,0 +1,196 @@
+--- a/api/services/pipecat/event_handlers.py
++++ b/api/services/pipecat/event_handlers.py
+@@ -7,6 +7,7 @@
+ from api.services.campaign.circuit_breaker import circuit_breaker
+ from api.services.integrations import IntegrationRuntimeSession
+ from api.services.pipecat.audio_config import AudioConfig
++from api.services.pipecat.cooper_events import CooperEventClient
+ from api.services.pipecat.audio_playback import play_audio_loop
+ from api.services.pipecat.in_memory_buffers import (
+     InMemoryLogsBuffer,
+@@ -75,6 +76,7 @@
+     user_provider_id: str | None = None,
+     integration_runtime_sessions: list[IntegrationRuntimeSession] | None = None,
+     include_transcript_end_timestamps: bool = False,
++    cooper_events: CooperEventClient | None = None,
+ ):
+     """Register all event handlers for transport and task events.
+ 
+@@ -173,6 +175,8 @@
+     async def on_client_connected(_transport, _participant):
+         logger.debug("In on_client_connected callback handler")
+         ready_state["client_connected"] = True
++        if cooper_events:
++            await cooper_events.emit("call.started")
+         await maybe_trigger_initial_response()
+ 
+     @transport.event_handler("on_client_disconnected")
+@@ -396,6 +400,8 @@
+             FunctionNames.PROCESS_WORKFLOW_COMPLETION,
+             workflow_run_id,
+         )
++        if cooper_events:
++            await cooper_events.emit("call.ended")
+ 
+     # Return the buffer so it can be passed to other handlers
+     return in_memory_audio_buffers
+--- a/api/services/pipecat/transcript_log_coordinator.py
++++ b/api/services/pipecat/transcript_log_coordinator.py
+@@ -10,7 +10,7 @@
+ import asyncio
+ from dataclasses import dataclass, field
+ from datetime import UTC, datetime
+-from typing import TYPE_CHECKING
++from typing import TYPE_CHECKING, Awaitable, Callable
+ 
+ from api.services.pipecat.realtime_feedback_events import (
+     build_bot_text_event,
+@@ -51,8 +51,13 @@
+ class TranscriptLogCoordinator:
+     """Join turn, transcript, and speech facts before appending log events."""
+ 
+-    def __init__(self, logs_buffer: "InMemoryLogsBuffer"):
++    def __init__(
++        self,
++        logs_buffer: "InMemoryLogsBuffer",
++        on_final_transcript: Callable[..., Awaitable[None]] | None = None,
++    ):
+         self._logs_buffer = logs_buffer
++        self._on_final_transcript = on_final_transcript
+         self._states: dict[int, _TurnTranscriptState] = {}
+         self._active_turn_id: int | None = None
+         self._lock = asyncio.Lock()
+@@ -286,6 +291,15 @@
+             node_name=side.node_name,
+             use_current_node=False,
+         )
++        if self._on_final_transcript:
++            speaker = "caller" if side is state.user else "assistant"
++            try:
++                await self._on_final_transcript(
++                    speaker=speaker, text=side.text, interrupted=state.interrupted
++                )
++            except Exception:
++                # External live-monitoring delivery must never affect the call.
++                pass
+         side.emitted = True
+ 
+     async def flush(self) -> None:
+--- a/api/services/pipecat/run_pipeline.py
++++ b/api/services/pipecat/run_pipeline.py
+@@ -28,6 +28,7 @@
+     unregister_active_call as unregister_worker_active_call,
+ )
+ from api.services.pipecat.audio_config import AudioConfig, create_audio_config
++from api.services.pipecat.cooper_events import CooperEventClient
+ from api.services.pipecat.event_handlers import (
+     register_audio_data_handler,
+     register_event_handlers,
+@@ -386,6 +387,12 @@
+             workflow_run=workflow_run,
+             resolved_user_config=user_config,
+             organization_id=organization_id,
++            cooper_call={
++                "provider": provider_name,
++                "providerCallId": call_id,
++                "callLegId": transport_kwargs.get("call_leg_id"),
++                "callSessionId": transport_kwargs.get("call_session_id"),
++            },
+         )
+     except Exception as e:
+         # Closest layer to the failure and the only one with the traceback, so
+@@ -557,6 +564,7 @@
+     workflow_run=None,
+     resolved_user_config=None,
+     organization_id: int | None = None,
++    cooper_call: dict | None = None,
+ ) -> None:
+     """
+     Run the pipeline with the given transport and configuration
+@@ -1067,7 +1075,18 @@
+ 
+     # Create pipeline task with audio configuration
+     task = create_pipeline_task(pipeline, workflow_run_id, audio_config)
+-    transcript_log_coordinator = TranscriptLogCoordinator(in_memory_logs_buffer)
++    cooper_call = {
++        "provider": (cooper_call or {}).get("provider") or merged_call_context_vars.get("provider"),
++        "providerCallId": (cooper_call or {}).get("providerCallId"),
++        "callLegId": (cooper_call or {}).get("callLegId"),
++        "callSessionId": (cooper_call or {}).get("callSessionId"),
++        "from": merged_call_context_vars.get("caller_number"),
++        "to": merged_call_context_vars.get("called_number"),
++    }
++    cooper_events = CooperEventClient(workflow_run_id, cooper_call)
++    transcript_log_coordinator = TranscriptLogCoordinator(
++        in_memory_logs_buffer, on_final_transcript=cooper_events.emit_transcript
++    )
+     if task.turn_tracking_observer is None:
+         raise RuntimeError("Transcript logging requires turn tracking to be enabled")
+     transcript_log_coordinator.attach_turn_tracking_observer(
+@@ -1150,6 +1169,7 @@
+         user_provider_id=user_provider_id,
+         integration_runtime_sessions=integration_runtime_sessions,
+         include_transcript_end_timestamps=include_transcript_end_timestamps,
++        cooper_events=cooper_events,
+     )
+ 
+     register_audio_data_handler(audio_buffer, workflow_run_id, in_memory_audio_buffer)
+--- /dev/null
++++ b/api/services/pipecat/cooper_events.py
+@@ -0,0 +1,56 @@
++"""Best-effort, signed Cooper2Talk event delivery for live telephony runs."""
++
++import hashlib
++import hmac
++import json
++import os
++from datetime import UTC, datetime
++from typing import Any
++from uuid import uuid4
++
++import aiohttp
++from loguru import logger
++
++
++class CooperEventClient:
++    """Publish non-audio live events without ever blocking the voice pipeline."""
++
++    def __init__(self, workflow_run_id: int, call: dict[str, Any]):
++        self._workflow_run_id = workflow_run_id
++        self._call = call
++        self._endpoint = os.getenv("COOPER_EVENT_URL", "").strip()
++        self._secret = os.getenv("COOPER_EVENT_SECRET", "")
++
++    @property
++    def enabled(self) -> bool:
++        return bool(self._endpoint and len(self._secret) >= 16)
++
++    async def emit(self, event_type: str, payload: dict[str, Any] | None = None) -> None:
++        if not self.enabled:
++            return
++        event = {
++            "id": str(uuid4()),
++            "type": event_type,
++            "occurredAt": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
++            "call": {"dograhRunId": str(self._workflow_run_id), **self._call},
++        }
++        if payload:
++            event["payload"] = payload
++        raw = json.dumps(event, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
++        signature = hmac.new(self._secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()
++        try:
++            timeout = aiohttp.ClientTimeout(total=2)
++            async with aiohttp.ClientSession(timeout=timeout) as session:
++                async with session.post(
++                    self._endpoint,
++                    data=raw,
++                    headers={"content-type": "application/json", "x-cooper-signature": f"sha256={signature}"},
++                ) as response:
++                    if response.status >= 300:
++                        logger.warning("Cooper2Talk event delivery failed: {}", response.status)
++        except Exception as exc:
++            logger.debug("Cooper2Talk event delivery skipped: {}", exc)
++
++    async def emit_transcript(self, *, speaker: str, text: str, interrupted: bool) -> None:
++        if text.strip():
++            await self.emit("transcript.final", {"speaker": speaker, "text": text, "interrupted": interrupted})

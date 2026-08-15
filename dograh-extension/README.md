@@ -28,6 +28,11 @@ Apply `no-audio-recording-v1.45.0.patch` after the provider patches. It
 disables audio capture and object-storage uploads, preserving only the text
 transcript and call metadata required by Cooper2Talk's retention policy.
 
+Apply `live-transcript-bridge-v1.45.0.patch` after the no-recording patch. It
+sends signed final call and transcript events over the private Docker network
+to Cooper2Talk. Set `COOPER_EVENT_URL` and `COOPER_EVENT_SECRET` only in
+Dograh's runtime environment; do not place either value in the patch.
+
 Compatibility checks executed against the deployed release:
 
 - The Rumik provider parses from Dograh's discriminated `TTSConfig` union.

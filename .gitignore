@@ -21,3 +21,4 @@ dograh-data/
 
 # One-off local source copies used while preparing Dograh compatibility patches
 .rumik-patch-*/
+.dograh-live-bridge/
