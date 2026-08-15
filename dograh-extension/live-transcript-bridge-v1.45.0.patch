@@ -137,7 +137,7 @@
      register_audio_data_handler(audio_buffer, workflow_run_id, in_memory_audio_buffer)
 --- /dev/null
 +++ b/api/services/pipecat/cooper_events.py
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,59 @@
 +"""Best-effort, signed Cooper2Talk event delivery for live telephony runs."""
 +
 +import hashlib
@@ -172,7 +172,10 @@
 +            "id": str(uuid4()),
 +            "type": event_type,
 +            "occurredAt": datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z"),
-+            "call": {"dograhRunId": str(self._workflow_run_id), **self._call},
++            "call": {
++                "dograhRunId": str(self._workflow_run_id),
++                **{key: value for key, value in self._call.items() if value is not None},
++            },
 +        }
 +        if payload:
 +            event["payload"] = payload
