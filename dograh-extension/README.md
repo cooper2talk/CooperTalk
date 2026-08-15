@@ -14,6 +14,10 @@ synthesis when Pipecat receives an interruption.
 The extension does not validate a Rumik API key by generating speech. Rumik
 validates the credential during its WebSocket handshake on a live call.
 
+Apply `managed-secrets-v1.45.0.patch` after the Rumik patch. It keeps the
+`cooper2talk-managed` marker in Dograh's database and replaces it only inside
+the running API from `DEEPGRAM_API_KEY`, `GROQ_API_KEY`, and `RUMIK_API_KEY`.
+
 Compatibility checks executed against the deployed release:
 
 - The Rumik provider parses from Dograh's discriminated `TTSConfig` union.
