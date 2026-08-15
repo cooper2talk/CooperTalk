@@ -30,6 +30,8 @@ services:
     image: caddy:2.10.2-alpine
     restart: unless-stopped
     env_file: ../.env.runtime
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "80:80"
       - "443:443"

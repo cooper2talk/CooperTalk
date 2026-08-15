@@ -2,3 +2,11 @@
   encode zstd gzip
   reverse_proxy api:3000
 }
+
+dograh.34-130-230-27.sslip.io {
+  reverse_proxy https://host.docker.internal:8443 {
+    transport http {
+      tls_insecure_skip_verify
+    }
+  }
+}
