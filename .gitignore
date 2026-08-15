@@ -12,6 +12,7 @@ dist/
 coverage/
 .vite/
 .turbo/
+*.tsbuildinfo
 
 # Local services
 postgres-data/
