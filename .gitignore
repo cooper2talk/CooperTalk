@@ -5,6 +5,8 @@
 *.pem
 *.key
 cooper_voice_key*
+cooper2talk
+cooper2talk.pub
 
 # Dependencies and generated output
 node_modules/

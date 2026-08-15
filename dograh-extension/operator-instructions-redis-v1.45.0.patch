@@ -1,0 +1,129 @@
+diff --git a/api/services/pipecat/operator_instructions.py b/api/services/pipecat/operator_instructions.py
+new file mode 100644
+index 0000000..2222222
+--- /dev/null
++++ b/api/services/pipecat/operator_instructions.py
+@@ -0,0 +1,108 @@
++"""Cross-worker delivery for authenticated Cooper2Talk operator interventions."""
++from __future__ import annotations
++
++import asyncio
++import json
++from collections.abc import Awaitable, Callable
++
++import redis.asyncio as aioredis
++from loguru import logger
++
++from api.constants import REDIS_URL
++
++InstructionHandler = Callable[[str, str], Awaitable[None]]
++ACTIVE_TTL_SECONDS = 15
++DEDUPLICATION_TTL_SECONDS = 3600
++QUEUE_TTL_SECONDS = 300
++
++_registrations: dict[int, tuple[aioredis.Redis, asyncio.Task[None]]] = {}
++
++
++def _active_key(workflow_run_id: int) -> str:
++    return f"cooper:operator-instruction:active:{workflow_run_id}"
++
++
++def _queue_key(workflow_run_id: int) -> str:
++    return f"cooper:operator-instruction:queue:{workflow_run_id}"
++
++
++def _deduplication_key(instruction_id: str) -> str:
++    return f"cooper:operator-instruction:seen:{instruction_id}"
++
++
++async def _consume(
++    workflow_run_id: int,
++    handler: InstructionHandler,
++    redis: aioredis.Redis,
++) -> None:
++    """Consume this call's durable queue in the process that owns its pipeline."""
++    try:
++        while True:
++            item = await redis.brpop(_queue_key(workflow_run_id), timeout=2)
++            await redis.expire(_active_key(workflow_run_id), ACTIVE_TTL_SECONDS)
++            if not item:
++                continue
++            _, raw_message = item
++            try:
++                message = json.loads(raw_message)
++                await handler(str(message["instructionId"]), str(message["text"]))
++            except (KeyError, TypeError, ValueError, json.JSONDecodeError):
++                logger.exception(
++                    "Discarded malformed Cooper2Talk operator instruction for run {}",
++                    workflow_run_id,
++                )
++            except Exception:
++                logger.exception(
++                    "Failed to apply Cooper2Talk operator instruction for run {}",
++                    workflow_run_id,
++                )
++    except asyncio.CancelledError:
++        raise
++
++
++async def register(workflow_run_id: int, handler: InstructionHandler) -> None:
++    """Make a running pipeline reachable from any Dograh API worker."""
++    await unregister(workflow_run_id)
++    redis = aioredis.from_url(REDIS_URL, decode_responses=True)
++    await redis.set(_active_key(workflow_run_id), "1", ex=ACTIVE_TTL_SECONDS)
++    consumer = asyncio.create_task(_consume(workflow_run_id, handler, redis))
++    _registrations[workflow_run_id] = (redis, consumer)
++
++
++async def unregister(workflow_run_id: int) -> None:
++    registration = _registrations.pop(workflow_run_id, None)
++    if not registration:
++        return
++    redis, consumer = registration
++    consumer.cancel()
++    try:
++        await consumer
++    except asyncio.CancelledError:
++        pass
++    try:
++        await redis.delete(_active_key(workflow_run_id))
++    finally:
++        await redis.aclose()
++
++
++async def submit(workflow_run_id: int, instruction_id: str, text: str) -> bool:
++    """Queue one idempotent instruction for the worker running this call."""
++    redis = aioredis.from_url(REDIS_URL, decode_responses=True)
++    try:
++        if not await redis.exists(_active_key(workflow_run_id)):
++            return False
++        if not await redis.set(
++            _deduplication_key(instruction_id),
++            "1",
++            nx=True,
++            ex=DEDUPLICATION_TTL_SECONDS,
++        ):
++            return True
++        await redis.lpush(
++            _queue_key(workflow_run_id),
++            json.dumps({"instructionId": instruction_id, "text": text}),
++        )
++        await redis.expire(_queue_key(workflow_run_id), QUEUE_TTL_SECONDS)
++        return True
++    finally:
++        await redis.aclose()
+diff --git a/api/services/pipecat/run_pipeline.py b/api/services/pipecat/run_pipeline.py
+index 3333333..4444444 100644
+--- a/api/services/pipecat/run_pipeline.py
++++ b/api/services/pipecat/run_pipeline.py
+@@ -1161,4 +1161,4 @@ async def _run_pipeline_impl(
+ 
+-    register_operator_instruction(workflow_run_id, apply_operator_instruction)
++    await register_operator_instruction(workflow_run_id, apply_operator_instruction)
+ 
+     # Register event handlers — resolve provider_id for PostHog tracking
+@@ -1193,3 +1193,3 @@ async def _run_pipeline_impl(
+     finally:
+-        unregister_operator_instruction(workflow_run_id)
++        await unregister_operator_instruction(workflow_run_id)
+         # Close MCP sessions here, not in engine.cleanup(). The anyio cancel

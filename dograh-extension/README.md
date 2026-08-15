@@ -33,6 +33,16 @@ sends signed final call and transcript events over the private Docker network
 to Cooper2Talk. Set `COOPER_EVENT_URL` and `COOPER_EVENT_SECRET` only in
 Dograh's runtime environment; do not place either value in the patch.
 
+Apply `operator-instructions-redis-v1.45.0.patch` after the live transcript
+bridge. Dograh runs multiple API workers, so this patch uses Redis to deliver
+an authenticated operator instruction to the worker that owns the active call.
+It rejects inactive calls, deduplicates retries, interrupts active speech, and
+does not persist audio.
+
+The current deployment uses Dograh's native Google Chirp 3 HD TTS service with
+the fixed female `en-US-Chirp3-HD-Aoede` voice. The retained Rumik patch is
+kept only as a pinned rollback option; Rumik is not the active voice provider.
+
 Compatibility checks executed against the deployed release:
 
 - The Rumik provider parses from Dograh's discriminated `TTSConfig` union.
@@ -42,3 +52,5 @@ Compatibility checks executed against the deployed release:
 - The Dograh API health endpoint stays healthy after rebuilding.
 - Audio recordings are not created or uploaded; transcript upload remains
   available.
+- A cross-process HTTP instruction is delivered exactly once through Redis to
+  the active call handler.
