@@ -13,7 +13,7 @@
 The existing US number `+14095060390` is for direct technical testing only. Do not configure Canadian mobile forwarding to it. Keep the Twilio configuration intact as rollback.
 
 1. In Telnyx, create an API key with Call Control access and copy the account webhook public key. Never put the API key in Git or chat.
-2. In GCP Secret Manager, create `cooper-telnyx-api-key` and grant `cooper2talk-runtime` the existing Secret Manager access role. Run `bash deploy/render-runtime-env.sh` and `bash deploy/render-dograh-runtime-env.sh` on the VM, then restart the relevant containers.
+2. In GCP Secret Manager, create `cooper-telnyx-api-key` and grant `cooper2talk-runtime@PROJECT_ID.iam.gserviceaccount.com` the **Secret Manager Secret Accessor** role on that secret. Run `bash deploy/render-runtime-env.sh` and `bash deploy/render-dograh-runtime-env.sh` on the VM, then restart the relevant containers.
 3. In Dograh, add a Telnyx telephony configuration. Set its API-key field to `cooper2talk-managed` (the deployment resolves this marker inside the container), paste the Telnyx webhook public key, leave the Call Control App ID blank, and add `+14095060390`. Dograh will create/configure its Call Control application.
 4. Bind `+14095060390` to that Call Control application and select the receptionist workflow as inbound. Confirm the Telnyx number is voice-enabled before placing a test call.
 5. Place a direct call only. Verify a signed inbound event, live transcript, fixed Emma voice, console injection, transfer and hang-up. Stop if the Telnyx pretrial blocks Call Control; do not fund it just to proceed.

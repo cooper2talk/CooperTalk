@@ -51,8 +51,9 @@ secret_value() {
 
 optional_secret_value() {
   local secret_name="$1"
-  if gcloud secrets describe "$secret_name" --project="$project" >/dev/null 2>&1; then
-    secret_value "$secret_name"
+  local value
+  if value="$(secret_value "$secret_name" 2>/dev/null)"; then
+    printf '%s' "$value"
   fi
 }
 
