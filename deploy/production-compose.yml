@@ -30,8 +30,9 @@ services:
     image: caddy:2.10.2-alpine
     restart: unless-stopped
     env_file: ../.env.runtime
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    networks:
+      - default
+      - dograh_app-network
     ports:
       - "80:80"
       - "443:443"
@@ -47,3 +48,7 @@ volumes:
   postgres-data:
   caddy-data:
   caddy-config:
+
+networks:
+  dograh_app-network:
+    external: true

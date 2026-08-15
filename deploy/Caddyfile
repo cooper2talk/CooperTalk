@@ -4,7 +4,7 @@
 }
 
 dograh.34-130-230-27.sslip.io {
-  reverse_proxy https://host.docker.internal:8443 {
+  reverse_proxy https://nginx_https:443 {
     transport http {
       tls_insecure_skip_verify
     }
