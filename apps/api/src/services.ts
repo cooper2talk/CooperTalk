@@ -91,6 +91,7 @@ export class CallService {
   constructor(private readonly repo: Repository, private readonly config: Config, private readonly broadcast: Broadcast) {}
   async ingest(event: DograhEvent) {
     if (!(await this.repo.markEventProcessed(event.id))) return { duplicate: true };
+    const browserTest = event.call.metadata?.browserTest === true;
     let call = await this.repo.getCallByRunId(event.call.dograhRunId);
     if (!call) {
       const provider = event.call.provider ?? "twilio";
@@ -107,13 +108,13 @@ export class CallService {
     await this.repo.saveCall(call);
     if (event.type === "call.started") {
       this.broadcast("call.started", call);
-      for (const operator of this.config.operatorNumbers) await this.repo.queueOutbound({ id: randomUUID(), callId: call.id, kind: "whatsapp_alert", body: { operator, call }, attempts: 0, availableAt: new Date().toISOString() });
+      if (!browserTest) for (const operator of this.config.operatorNumbers) await this.repo.queueOutbound({ id: randomUUID(), callId: call.id, kind: "whatsapp_alert", body: { operator, call }, attempts: 0, availableAt: new Date().toISOString() });
     }
     if (event.type === "transcript.final" && event.payload?.speaker && event.payload.text) {
       const message: TranscriptMessage = { id: randomUUID(), callId: call.id, speaker: event.payload.speaker, text: event.payload.text, source: "dograh", occurredAt: event.occurredAt, interrupted: event.payload.interrupted };
       await this.repo.addTranscript(message);
       this.broadcast("transcript.message", message);
-      for (const operator of this.config.operatorNumbers) await this.repo.queueOutbound({ id: randomUUID(), callId: call.id, kind: "whatsapp_transcript", body: { operator, text: `${message.speaker === "caller" ? "Caller" : "AI"}: ${message.text}` }, attempts: 0, availableAt: new Date().toISOString() });
+      if (!browserTest) for (const operator of this.config.operatorNumbers) await this.repo.queueOutbound({ id: randomUUID(), callId: call.id, kind: "whatsapp_transcript", body: { operator, text: `${message.speaker === "caller" ? "Caller" : "AI"}: ${message.text}` }, attempts: 0, availableAt: new Date().toISOString() });
     }
     this.broadcast("call.updated", call);
     return { duplicate: false, call };
