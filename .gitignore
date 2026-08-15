@@ -1,0 +1,19 @@
+# Secrets and local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+cooper_voice_key*
+
+# Dependencies and generated output
+node_modules/
+dist/
+coverage/
+.vite/
+.turbo/
+
+# Local services
+postgres-data/
+dograh-data/
+*.log
