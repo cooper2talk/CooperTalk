@@ -64,7 +64,7 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
   }
   async function getCall(callId: string) { const call = await repo.getCall(callId); if (!call) fail(404, "Call not found"); return call; }
 
-  app.get("/health", async () => ({ status: "ok", service: "cooper2talk", timestamp: new Date().toISOString(), configured: { dograh: Boolean(config.DOGRAH_BASE_URL && config.DOGRAH_API_KEY), twilio: Boolean(config.TWILIO_ACCOUNT_SID && config.TWILIO_AUTH_TOKEN), telnyx: Boolean(config.TELNYX_API_KEY), whatsapp: Boolean(config.WHATSAPP_ACCESS_TOKEN && config.WHATSAPP_PHONE_NUMBER_ID), database: Boolean(config.DATABASE_URL) } }));
+  app.get("/health", async () => ({ status: "ok", service: "cooper2talk", timestamp: new Date().toISOString(), configured: { dograh: Boolean(config.DOGRAH_BASE_URL && config.DOGRAH_EVENT_SECRET), twilio: Boolean(config.TWILIO_ACCOUNT_SID && config.TWILIO_AUTH_TOKEN), telnyx: Boolean(config.TELNYX_API_KEY), whatsapp: Boolean(config.WHATSAPP_ACCESS_TOKEN && config.WHATSAPP_PHONE_NUMBER_ID), database: Boolean(config.DATABASE_URL) } }));
 
   app.post("/api/auth/login", async (request, reply) => {
     const body = loginSchema.parse(request.body);
