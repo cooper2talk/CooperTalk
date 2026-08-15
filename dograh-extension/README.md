@@ -21,7 +21,8 @@ the running API from `DEEPGRAM_API_KEY`, `GROQ_API_KEY`, and `RUMIK_API_KEY`.
 Apply `telnyx-managed-secret-v1.45.0.patch` after those patches when enabling
 the Telnyx pilot. Its Telnyx configuration also stores only the
 `cooper2talk-managed` marker; the API resolves the real key from
-`TELNYX_API_KEY` at runtime.
+`TELNYX_API_KEY` at runtime, including while Dograh auto-creates the Call
+Control Application.
 
 Compatibility checks executed against the deployed release:
 

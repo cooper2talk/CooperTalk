@@ -1,0 +1,42 @@
+diff --git a/api/services/telephony/providers/telnyx/__init__.py b/api/services/telephony/providers/telnyx/__init__.py
+index ecbf33f..c3ba5c1 100644
+--- a/api/services/telephony/providers/telnyx/__init__.py
++++ b/api/services/telephony/providers/telnyx/__init__.py
+@@ -1,5 +1,6 @@
+ """Telnyx telephony provider package."""
+ 
++import os
+ import uuid
+ from typing import Any, Dict
+ 
+ import aiohttp
+@@ -21,11 +22,20 @@ from .transport import create_transport
+ TELNYX_API_BASE_URL = "https://api.telnyx.com/v2"
+ 
++MANAGED_API_KEY_MARKER = "cooper2talk-managed"
++
++
++def _resolve_runtime_api_key(api_key: Any) -> Any:
++    """Replace the database marker only inside the running API."""
++    if api_key == MANAGED_API_KEY_MARKER:
++        return os.getenv("TELNYX_API_KEY")
++    return api_key
++
++
+ 
+ 
+ def _config_loader(value: Dict[str, Any]) -> Dict[str, Any]:
+     return {
+         "provider": "telnyx",
+-        "api_key": value.get("api_key"),
++        "api_key": _resolve_runtime_api_key(value.get("api_key")),
+         "connection_id": value.get("connection_id"),
+         "webhook_public_key": value.get("webhook_public_key"),
+         "from_numbers": value.get("from_numbers", []),
+@@ -43,7 +53,7 @@ async def _ensure_connection_id(credentials: Dict[str, Any]) -> Dict[str, Any]:
+     if credentials.get("connection_id"):
+         return credentials
+ 
+-    api_key = credentials.get("api_key")
++    api_key = _resolve_runtime_api_key(credentials.get("api_key"))
+     if not api_key:
