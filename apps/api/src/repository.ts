@@ -28,6 +28,7 @@ export class MemoryRepository implements Repository {
   async listTranscript(callId: string) { return structuredClone(this.messages.get(callId) ?? []); }
   async markEventProcessed(id: string) { if (this.processed.has(id)) return false; this.processed.add(id); return true; }
   async queueOutbound(message: OutboundMessage) { this.outbound.set(message.id, structuredClone(message)); }
+  async listOutboundForCall(callId: string) { return [...this.outbound.values()].filter((message) => message.callId === callId).map((message) => structuredClone(message)); }
   async claimOutbound(now: string) { return [...this.outbound.values()].find((m) => !m.deliveredAt && !m.failedAt && m.availableAt <= now); }
   async saveOutbound(message: OutboundMessage) { this.outbound.set(message.id, structuredClone(message)); }
   async findCallByWhatsAppMessage(messageId: string) { const id = this.whatsapp.get(messageId); return id ? this.getCall(id) : undefined; }
@@ -48,7 +49,7 @@ export class PostgresRepository implements Repository {
       CREATE TABLE IF NOT EXISTS calls (id uuid PRIMARY KEY, dograh_run_id text UNIQUE NOT NULL, provider text NOT NULL DEFAULT 'twilio', provider_call_id text, call_leg_id text, call_session_id text, twilio_call_sid text, stream_sid text, from_number text, to_number text, forwarded_from text, original_caller text, status text NOT NULL, started_at timestamptz NOT NULL, ended_at timestamptz, ai_state text, cost_usd numeric, metadata jsonb NOT NULL DEFAULT '{}');
       CREATE TABLE IF NOT EXISTS transcript_messages (id uuid PRIMARY KEY, call_id uuid NOT NULL REFERENCES calls(id) ON DELETE CASCADE, speaker text NOT NULL, text text NOT NULL, source text NOT NULL, occurred_at timestamptz NOT NULL, interrupted boolean NOT NULL DEFAULT false);
       CREATE TABLE IF NOT EXISTS processed_events (id text PRIMARY KEY, processed_at timestamptz NOT NULL DEFAULT now());
-      CREATE TABLE IF NOT EXISTS outbound_messages (id uuid PRIMARY KEY, call_id uuid NOT NULL REFERENCES calls(id) ON DELETE CASCADE, kind text NOT NULL, body jsonb NOT NULL, attempts integer NOT NULL DEFAULT 0, available_at timestamptz NOT NULL, external_id text, delivered_at timestamptz, failed_at timestamptz);
+      CREATE TABLE IF NOT EXISTS outbound_messages (id uuid PRIMARY KEY, call_id uuid NOT NULL REFERENCES calls(id) ON DELETE CASCADE, kind text NOT NULL, body jsonb NOT NULL, attempts integer NOT NULL DEFAULT 0, available_at timestamptz NOT NULL, external_id text, delivered_at timestamptz, failed_at timestamptz, last_error text);
       CREATE TABLE IF NOT EXISTS whatsapp_message_map (message_id text PRIMARY KEY, call_id uuid NOT NULL REFERENCES calls(id) ON DELETE CASCADE);
       CREATE TABLE IF NOT EXISTS audit_events (id uuid PRIMARY KEY, action text NOT NULL, actor_id uuid, call_id uuid, details jsonb NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
       CREATE TABLE IF NOT EXISTS business_config (id boolean PRIMARY KEY DEFAULT true CHECK(id), value jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
@@ -58,6 +59,7 @@ export class PostgresRepository implements Repository {
       ALTER TABLE calls ADD COLUMN IF NOT EXISTS provider_call_id text;
       ALTER TABLE calls ADD COLUMN IF NOT EXISTS call_leg_id text;
       ALTER TABLE calls ADD COLUMN IF NOT EXISTS call_session_id text;
+      ALTER TABLE outbound_messages ADD COLUMN IF NOT EXISTS last_error text;
       UPDATE calls SET provider = 'twilio' WHERE provider IS NULL;
       ALTER TABLE calls ALTER COLUMN provider SET DEFAULT 'twilio';
     `);
@@ -79,8 +81,10 @@ export class PostgresRepository implements Repository {
   async listTranscript(callId: string) { const q=await this.pool.query("SELECT * FROM transcript_messages WHERE call_id=$1 ORDER BY occurred_at",[callId]); return q.rows.map((r)=>({id:r.id,callId:r.call_id,speaker:r.speaker,text:r.text,source:r.source,occurredAt:r.occurred_at.toISOString(),interrupted:r.interrupted})); }
   async markEventProcessed(id: string) { const q=await this.pool.query("INSERT INTO processed_events(id) VALUES($1) ON CONFLICT DO NOTHING",[id]); return q.rowCount === 1; }
   async queueOutbound(m: OutboundMessage) { await this.pool.query("INSERT INTO outbound_messages(id,call_id,kind,body,attempts,available_at) VALUES($1,$2,$3,$4,$5,$6)",[m.id,m.callId,m.kind,JSON.stringify(m.body),m.attempts,m.availableAt]); }
-  async claimOutbound(now: string) { const q=await this.pool.query("SELECT * FROM outbound_messages WHERE delivered_at IS NULL AND failed_at IS NULL AND available_at <= $1 ORDER BY available_at LIMIT 1",[now]); const r=q.rows[0]; return r&&{id:r.id,callId:r.call_id,kind:r.kind,body:r.body,attempts:r.attempts,availableAt:r.available_at.toISOString(),externalId:r.external_id??undefined,deliveredAt:r.delivered_at?.toISOString(),failedAt:r.failed_at?.toISOString()}; }
-  async saveOutbound(m: OutboundMessage) { await this.pool.query("UPDATE outbound_messages SET attempts=$2,available_at=$3,external_id=$4,delivered_at=$5,failed_at=$6 WHERE id=$1",[m.id,m.attempts,m.availableAt,m.externalId,m.deliveredAt,m.failedAt]); }
+  private toOutbound(row: any): OutboundMessage { return { id: row.id, callId: row.call_id, kind: row.kind, body: row.body, attempts: row.attempts, availableAt: row.available_at.toISOString(), externalId: row.external_id ?? undefined, deliveredAt: row.delivered_at?.toISOString(), failedAt: row.failed_at?.toISOString(), lastError: row.last_error ?? undefined }; }
+  async listOutboundForCall(callId: string) { const q = await this.pool.query("SELECT * FROM outbound_messages WHERE call_id=$1 ORDER BY available_at", [callId]); return q.rows.map((row) => this.toOutbound(row)); }
+  async claimOutbound(now: string) { const q=await this.pool.query("SELECT * FROM outbound_messages WHERE delivered_at IS NULL AND failed_at IS NULL AND available_at <= $1 ORDER BY available_at LIMIT 1",[now]); return q.rows[0] && this.toOutbound(q.rows[0]); }
+  async saveOutbound(m: OutboundMessage) { await this.pool.query("UPDATE outbound_messages SET attempts=$2,available_at=$3,external_id=$4,delivered_at=$5,failed_at=$6,last_error=$7 WHERE id=$1",[m.id,m.attempts,m.availableAt,m.externalId,m.deliveredAt,m.failedAt,m.lastError]); }
   async findCallByWhatsAppMessage(messageId: string) { const q=await this.pool.query("SELECT c.* FROM whatsapp_message_map w JOIN calls c ON c.id=w.call_id WHERE w.message_id=$1",[messageId]); return q.rows[0]&&this.toCall(q.rows[0]); }
   async mapWhatsAppMessage(messageId: string, callId: string) { await this.pool.query("INSERT INTO whatsapp_message_map VALUES($1,$2) ON CONFLICT DO NOTHING",[messageId,callId]); }
   async writeAudit(action: string, actorId: string | undefined, callId: string | undefined, details: Record<string, unknown>) { await this.pool.query("INSERT INTO audit_events VALUES($1,$2,$3,$4,$5,now())",[randomUUID(),action,actorId,callId,JSON.stringify(details)]); }

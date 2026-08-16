@@ -1,5 +1,11 @@
 import { z } from "zod";
 
+const e164Number = z.string().regex(/^\+[1-9]\d{7,14}$/, "must be an E.164 phone number");
+const whatsappAlertRoute = z.object({
+  agentLabel: z.string().trim().min(1).max(120)
+});
+const whatsappAlertRoutes = z.record(e164Number, whatsappAlertRoute);
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(3000),
@@ -19,14 +25,32 @@ const schema = z.object({
   WHATSAPP_VERIFY_TOKEN: z.string().min(16).default("development-whatsapp-verify-token"),
   WHATSAPP_APP_SECRET: z.string().optional(),
   WHATSAPP_ALERT_TEMPLATE: z.string().default("cooper_live_call_alert"),
+  WHATSAPP_ALERT_ROUTES: z.string().default(""),
   OPERATOR_NUMBERS: z.string().default(""),
   ADMIN_EMAIL: z.string().email().default("admin@example.ca"),
   ADMIN_PASSWORD: z.string().min(12).default("change-me-now-123"),
   TRANSCRIPT_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30)
 });
 
-export type Config = z.infer<typeof schema> & { operatorNumbers: Set<string> };
+export type WhatsAppAlertRoute = z.infer<typeof whatsappAlertRoute>;
+export type Config = z.infer<typeof schema> & {
+  operatorNumbers: Set<string>;
+  whatsappAlertRoutes: Map<string, WhatsAppAlertRoute>;
+};
+
 export function loadConfig(env = process.env): Config {
   const parsed = schema.parse(env);
-  return { ...parsed, operatorNumbers: new Set(parsed.OPERATOR_NUMBERS.split(",").map((v) => v.trim()).filter(Boolean)) };
+  let routes: Record<string, WhatsAppAlertRoute> = {};
+  if (parsed.WHATSAPP_ALERT_ROUTES.trim()) {
+    try {
+      routes = whatsappAlertRoutes.parse(JSON.parse(parsed.WHATSAPP_ALERT_ROUTES));
+    } catch (error) {
+      throw new Error(`Invalid WHATSAPP_ALERT_ROUTES: ${error instanceof Error ? error.message : "must be a JSON route map"}`);
+    }
+  }
+  return {
+    ...parsed,
+    operatorNumbers: new Set(parsed.OPERATOR_NUMBERS.split(",").map((v) => v.trim()).filter(Boolean)),
+    whatsappAlertRoutes: new Map(Object.entries(routes))
+  };
 }

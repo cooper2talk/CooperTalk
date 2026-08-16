@@ -78,14 +78,13 @@ export class TelephonyClient {
 export class WhatsAppClient {
   constructor(private readonly config: Config) {}
   async send(body: Record<string, unknown>) {
-    if (!this.config.WHATSAPP_ACCESS_TOKEN || !this.config.WHATSAPP_PHONE_NUMBER_ID) return { externalId: `sim-${randomUUID()}` };
+    if (!this.config.WHATSAPP_ACCESS_TOKEN || !this.config.WHATSAPP_PHONE_NUMBER_ID) throw new Error("WhatsApp Cloud API sender credentials are not configured");
     const response = await fetch(`https://graph.facebook.com/v22.0/${this.config.WHATSAPP_PHONE_NUMBER_ID}/messages`, { method: "POST", headers: { authorization: `Bearer ${this.config.WHATSAPP_ACCESS_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify(body) });
     if (!response.ok) throw new Error(`WhatsApp send failed (${response.status})`);
     const json = await response.json() as { messages?: Array<{ id: string }> };
     return { externalId: json.messages?.[0]?.id ?? `unknown-${randomUUID()}` };
   }
-  alertBody(to: string, call: Call) { return { messaging_product: "whatsapp", to: to.replace(/^\+/, ""), type: "template", template: { name: this.config.WHATSAPP_ALERT_TEMPLATE, language: { code: "en" }, components: [{ type: "body", parameters: [{ type: "text", text: call.id }, { type: "text", text: call.originalCaller ?? "unknown caller" }] }] } }; }
-  textBody(to: string, text: string) { return { messaging_product: "whatsapp", to: to.replace(/^\+/, ""), type: "text", text: { body: text } }; }
+  alertBody(to: string, call: Call, agentLabel: string) { return { messaging_product: "whatsapp", to: to.replace(/^\+/, ""), type: "template", template: { name: this.config.WHATSAPP_ALERT_TEMPLATE, language: { code: "en" }, components: [{ type: "body", parameters: [{ type: "text", text: agentLabel }, { type: "text", text: call.toNumber ?? "unknown number" }, { type: "text", text: call.originalCaller ?? call.fromNumber ?? "unknown caller" }] }] } }; }
 }
 
 export type Broadcast = (event: string, payload: unknown) => void;
@@ -110,13 +109,13 @@ export class CallService {
     await this.repo.saveCall(call);
     if (event.type === "call.started") {
       this.broadcast("call.started", call);
-      if (!browserTest) for (const operator of this.config.operatorNumbers) await this.repo.queueOutbound({ id: randomUUID(), callId: call.id, kind: "whatsapp_alert", body: { operator, call }, attempts: 0, availableAt: new Date().toISOString() });
+      const alertRoute = call.toNumber ? this.config.whatsappAlertRoutes.get(call.toNumber) : undefined;
+      if (!browserTest && alertRoute) for (const operator of this.config.operatorNumbers) await this.repo.queueOutbound({ id: randomUUID(), callId: call.id, kind: "whatsapp_alert", body: { operator, call, agentLabel: alertRoute.agentLabel }, attempts: 0, availableAt: new Date().toISOString() });
     }
     if (event.type === "transcript.final" && event.payload?.speaker && event.payload.text) {
       const message: TranscriptMessage = { id: randomUUID(), callId: call.id, speaker: event.payload.speaker, text: event.payload.text, source: "dograh", occurredAt: event.occurredAt, interrupted: event.payload.interrupted };
       await this.repo.addTranscript(message);
       this.broadcast("transcript.message", message);
-      if (!browserTest) for (const operator of this.config.operatorNumbers) await this.repo.queueOutbound({ id: randomUUID(), callId: call.id, kind: "whatsapp_transcript", body: { operator, text: `${message.speaker === "caller" ? "Caller" : "AI"}: ${message.text}` }, attempts: 0, availableAt: new Date().toISOString() });
     }
     this.broadcast("call.updated", call);
     return { duplicate: false, call };
@@ -130,14 +129,17 @@ export class OutboxWorker {
     const message = await this.repo.claimOutbound(new Date().toISOString());
     if (!message) return false;
     try {
-      const body = message.kind === "whatsapp_alert" ? this.whatsapp.alertBody((message.body as any).operator, (message.body as any).call) : this.whatsapp.textBody((message.body as any).operator, (message.body as any).text);
+      if (message.kind !== "whatsapp_alert") throw new Error("Only approved WhatsApp call-alert templates may be delivered");
+      const body = this.whatsapp.alertBody((message.body as any).operator, (message.body as any).call, (message.body as any).agentLabel);
       const result = await this.whatsapp.send(body);
       message.externalId = result.externalId;
       message.deliveredAt = new Date().toISOString();
+      message.lastError = undefined;
       await this.repo.saveOutbound(message);
       await this.repo.mapWhatsAppMessage(result.externalId, message.callId);
-    } catch {
+    } catch (error) {
       message.attempts += 1;
+      message.lastError = error instanceof Error ? error.message.slice(0, 500) : "WhatsApp delivery failed";
       if (message.attempts >= 5) message.failedAt = new Date().toISOString();
       else message.availableAt = new Date(Date.now() + 1000 * 2 ** message.attempts).toISOString();
       await this.repo.saveOutbound(message);

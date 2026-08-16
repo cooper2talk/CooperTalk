@@ -4,8 +4,9 @@ import { hmacSha256 } from "../src/crypto.js";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { MemoryRepository } from "../src/repository.js";
+import { CallService, OutboxWorker, WhatsAppClient } from "../src/services.js";
 
-const config = loadConfig({ NODE_ENV: "test", PUBLIC_BASE_URL: "http://localhost:3000", SESSION_SECRET: "a-test-session-secret-long-enough", DOGRAH_EVENT_SECRET: "a-test-dograh-event-secret", WHATSAPP_VERIFY_TOKEN: "a-test-whatsapp-verify-token", ADMIN_EMAIL: "admin@example.ca", ADMIN_PASSWORD: "secure-demo-password" });
+const config = loadConfig({ NODE_ENV: "test", PUBLIC_BASE_URL: "http://localhost:3000", SESSION_SECRET: "a-test-session-secret-long-enough", DOGRAH_EVENT_SECRET: "a-test-dograh-event-secret", WHATSAPP_VERIFY_TOKEN: "a-test-whatsapp-verify-token", ADMIN_EMAIL: "admin@example.ca", ADMIN_PASSWORD: "secure-demo-password", OPERATOR_NUMBERS: "+16474727980", WHATSAPP_ALERT_ROUTES: JSON.stringify({ "+17053004321": { agentLabel: "Emma — Canadian Receptionist" }, "+14095060390": { agentLabel: "Nichole — ExcelLinx Project Manager Assistant" } }) });
 
 async function setup() { const app = await createApp(new MemoryRepository(), config); return app; }
 function cookie(response: any) { return String(response.headers["set-cookie"]).split(";")[0]; }
@@ -52,4 +53,36 @@ test("Telnyx call-control IDs use the provider-neutral record and actions", asyn
   const end = await app.inject({ method: "POST", url: `/api/calls/${call.id}/end`, headers: { cookie: cookie(login), "x-csrf-token": csrf } });
   assert.equal(end.statusCode, 200); assert.deepEqual(end.json(), { simulated: true, provider: "telnyx" });
   await app.close();
+});
+
+test("WhatsApp alerts are limited to the two approved agent numbers and include their labels", async () => {
+  const repo = new MemoryRepository();
+  const service = new CallService(repo, config, () => {});
+  await service.ingest(telnyxEvent());
+  const nicholeAlert = [...repo.outbound.values()];
+  assert.equal(nicholeAlert.length, 1);
+  assert.equal(nicholeAlert[0].kind, "whatsapp_alert");
+  assert.equal((nicholeAlert[0].body as any).operator, "+16474727980");
+  assert.equal((nicholeAlert[0].body as any).agentLabel, "Nichole — ExcelLinx Project Manager Assistant");
+  const nicholeTemplate = new WhatsAppClient(config).alertBody("+16474727980", (nicholeAlert[0].body as any).call, (nicholeAlert[0].body as any).agentLabel);
+  assert.deepEqual(nicholeTemplate.template.components[0].parameters.map((parameter) => parameter.text), ["Nichole — ExcelLinx Project Manager Assistant", "+14095060390", "+14095060390"]);
+
+  await service.ingest({ ...event(), id: "evt-emma-alert", call: { ...event().call, dograhRunId: "run-emma-alert", to: "7053004321" } });
+  await service.ingest({ ...event(), id: "evt-unrecognized-alert", call: { ...event().call, dograhRunId: "run-unrecognized-alert", to: "4165550199" } });
+  const alerts = [...repo.outbound.values()];
+  assert.equal(alerts.length, 2);
+  assert.equal((alerts.find((item) => (item.body as any).call.dograhRunId === "run-emma-alert")?.body as any).agentLabel, "Emma — Canadian Receptionist");
+});
+
+test("missing Meta sender credentials fail the queued alert instead of simulating delivery", async () => {
+  const repo = new MemoryRepository();
+  const service = new CallService(repo, config, () => {});
+  await service.ingest(telnyxEvent());
+  const worker = new OutboxWorker(repo, new WhatsAppClient(config));
+  assert.equal(await worker.processOne(), true);
+  const message = [...repo.outbound.values()][0];
+  assert.equal(message.deliveredAt, undefined);
+  assert.equal(message.externalId, undefined);
+  assert.equal(message.attempts, 1);
+  assert.equal(message.lastError, "WhatsApp Cloud API sender credentials are not configured");
 });

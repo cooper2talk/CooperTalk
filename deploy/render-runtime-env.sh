@@ -72,5 +72,12 @@ set_value RUMIK_API_KEY "$(secret_value cooper-rumik-api-key)"
 set_value TWILIO_ACCOUNT_SID "$(secret_value cooper-twilio-account-sid)"
 set_value TWILIO_AUTH_TOKEN "$(secret_value cooper-twilio-auth-token)"
 set_value TELNYX_API_KEY "$(optional_secret_value cooper-telnyx-api-key)"
+set_value WHATSAPP_ACCESS_TOKEN "$(optional_secret_value cooper-whatsapp-access-token)"
+set_value WHATSAPP_PHONE_NUMBER_ID "$(optional_secret_value cooper-whatsapp-phone-number-id)"
+set_value WHATSAPP_APP_SECRET "$(optional_secret_value cooper-whatsapp-app-secret)"
+set_value WHATSAPP_ALERT_TEMPLATE "${WHATSAPP_ALERT_TEMPLATE:-cooper_live_call_alert}"
+whatsapp_alert_routes_default='{"+17053004321":{"agentLabel":"Emma — Canadian Receptionist"},"+14095060390":{"agentLabel":"Nichole — ExcelLinx Project Manager Assistant"}}'
+set_value WHATSAPP_ALERT_ROUTES "${WHATSAPP_ALERT_ROUTES:-$whatsapp_alert_routes_default}"
+set_value OPERATOR_NUMBERS "${OPERATOR_NUMBERS:-+16474727980}"
 
 echo "Updated $output with mode 600."

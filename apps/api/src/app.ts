@@ -83,7 +83,7 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
   app.put("/api/business", async (request) => { const p = await requireUser(request, ["admin"]); const business = businessSchema.parse(request.body) as BusinessConfig; await repo.saveBusinessConfig(business); await repo.writeAudit("business.updated", p.user.id, undefined, {}); return { business }; });
 
   app.get("/api/calls", async (request) => { await requireUser(request); return { calls: await repo.listCalls() }; });
-  app.get("/api/calls/:callId", async (request) => { await requireUser(request); const call = await getCall((request.params as any).callId); return { call, transcript: await repo.listTranscript(call.id) }; });
+  app.get("/api/calls/:callId", async (request) => { await requireUser(request); const call = await getCall((request.params as any).callId); return { call, transcript: await repo.listTranscript(call.id), outbound: await repo.listOutboundForCall(call.id) }; });
   app.post("/api/calls/:callId/injections", async (request) => {
     const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); if (call.status !== "active") fail(409, "Call is not active");
     const injectionBody = typeof request.body === "string" ? JSON.parse(request.body) : request.body;

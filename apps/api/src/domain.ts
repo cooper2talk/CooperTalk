@@ -62,6 +62,7 @@ export interface OutboundMessage {
   externalId?: string;
   deliveredAt?: string;
   failedAt?: string;
+  lastError?: string;
 }
 
 export interface BusinessConfig {
@@ -117,6 +118,7 @@ export interface Repository {
   listTranscript(callId: string): Promise<TranscriptMessage[]>;
   markEventProcessed(id: string): Promise<boolean>;
   queueOutbound(message: OutboundMessage): Promise<void>;
+  listOutboundForCall(callId: string): Promise<OutboundMessage[]>;
   claimOutbound(now: string): Promise<OutboundMessage | undefined>;
   saveOutbound(message: OutboundMessage): Promise<void>;
   findCallByWhatsAppMessage(messageId: string): Promise<Call | undefined>;
