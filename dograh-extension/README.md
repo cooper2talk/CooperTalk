@@ -39,6 +39,11 @@ an authenticated operator instruction to the worker that owns the active call.
 It rejects inactive calls, deduplicates retries, interrupts active speech, and
 does not persist audio.
 
+Apply `workflow-label-events-v1.45.0.patch` after the live transcript bridge.
+It adds the executing workflow ID and workflow name to signed Cooper2Talk call
+events so the operator console distinguishes separate receptionists sharing the
+same Telnyx provider.
+
 The current deployment uses Dograh's native Google Chirp 3 HD TTS service with
 the fixed female `en-US-Chirp3-HD-Aoede` voice. The retained Rumik patch is
 kept only as a pinned rollback option; Rumik is not the active voice provider.

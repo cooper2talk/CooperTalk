@@ -10,7 +10,7 @@ const config = loadConfig({ NODE_ENV: "test", PUBLIC_BASE_URL: "http://localhost
 async function setup() { const app = await createApp(new MemoryRepository(), config); return app; }
 function cookie(response: any) { return String(response.headers["set-cookie"]).split(";")[0]; }
 function event() { return { id: "evt-1", type: "call.started", occurredAt: "2026-08-15T12:00:00.000Z", call: { dograhRunId: "run-42", twilioCallSid: "CA123", from: "4165550100", to: "7372508034", forwardedFrom: "6475550101" } }; }
-function telnyxEvent() { return { id: "evt-telnyx-1", type: "call.started", occurredAt: "2026-08-15T12:01:00.000Z", call: { dograhRunId: "run-telnyx-42", provider: "telnyx", providerCallId: "v3:call-control-id", callLegId: "v3:call-leg-id", callSessionId: "v3:call-session-id", from: "4095060390", to: "4095060390" } }; }
+function telnyxEvent() { return { id: "evt-telnyx-1", type: "call.started", occurredAt: "2026-08-15T12:01:00.000Z", call: { dograhRunId: "run-telnyx-42", provider: "telnyx", providerCallId: "v3:call-control-id", callLegId: "v3:call-leg-id", callSessionId: "v3:call-session-id", from: "4095060390", to: "4095060390", metadata: { workflowName: "Nichole - ExcelLinx Project Manager Assistant" } } }; }
 
 test("rejects unsigned Dograh events and accepts signed events once", async () => {
   const app = await setup(); const payload = JSON.stringify(event());
@@ -44,6 +44,7 @@ test("Telnyx call-control IDs use the provider-neutral record and actions", asyn
   const accepted = await app.inject({ method: "POST", url: "/internal/dograh/events", payload, headers: { "content-type": "application/json", "x-cooper-signature": signature } });
   assert.equal(accepted.statusCode, 200);
   assert.deepEqual({ provider: accepted.json().call.provider, providerCallId: accepted.json().call.providerCallId, callLegId: accepted.json().call.callLegId, callSessionId: accepted.json().call.callSessionId }, { provider: "telnyx", providerCallId: "v3:call-control-id", callLegId: "v3:call-leg-id", callSessionId: "v3:call-session-id" });
+  assert.equal(accepted.json().call.metadata.workflowName, "Nichole - ExcelLinx Project Manager Assistant");
   const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { email: "admin@example.ca", password: "secure-demo-password" } });
   const csrf = login.json().csrfToken; const call = (await app.inject({ method: "GET", url: "/api/calls", headers: { cookie: cookie(login) } })).json().calls[0];
   const transfer = await app.inject({ method: "POST", url: `/api/calls/${call.id}/transfer`, payload: { destination: "+14165550100" }, headers: { cookie: cookie(login), "x-csrf-token": csrf } });

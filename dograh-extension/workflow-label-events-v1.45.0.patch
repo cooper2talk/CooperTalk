@@ -1,0 +1,18 @@
+diff --git a/api/services/pipecat/run_pipeline.py b/api/services/pipecat/run_pipeline.py
+index 5555555..6666666 100644
+--- a/api/services/pipecat/run_pipeline.py
++++ b/api/services/pipecat/run_pipeline.py
+@@ -395,3 +395,7 @@ async def _run_pipeline_telephony_impl(
+                 "callLegId": transport_kwargs.get("call_leg_id"),
+                 "callSessionId": transport_kwargs.get("call_session_id"),
++                "metadata": {
++                    "workflowId": workflow.id,
++                    "workflowName": workflow.name,
++                },
+             },
+@@ -1085,4 +1089,5 @@ async def _run_pipeline_impl(
+         "from": merged_call_context_vars.get("caller_number"),
+         "to": merged_call_context_vars.get("called_number"),
++        "metadata": (cooper_call or {}).get("metadata"),
+     }
+     cooper_events = CooperEventClient(workflow_run_id, cooper_call)
