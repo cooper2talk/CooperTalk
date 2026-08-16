@@ -17,6 +17,11 @@ validates the credential during its WebSocket handshake on a live call.
 Apply `managed-secrets-v1.45.0.patch` after the Rumik patch. It keeps the
 `cooper2talk-managed` marker in Dograh's database and replaces it only inside
 the running API from `DEEPGRAM_API_KEY`, `GROQ_API_KEY`, and `RUMIK_API_KEY`.
+For a separately owned ExcelLinx Groq account, the
+`cooper2talk-managed:groq-excellinx` marker resolves only to the runtime
+`GROQ_EXCELLINX_API_KEY`; no provider key is written to Dograh's database.
+Apply `groq-excellinx-managed-secret-v1.45.0.patch` after the managed-secret
+patch when assigning an ExcelLinx-owned Groq key to a workflow.
 
 Apply `telnyx-managed-secret-v1.45.0.patch` after those patches when enabling
 the Telnyx pilot. Its Telnyx configuration also stores only the
