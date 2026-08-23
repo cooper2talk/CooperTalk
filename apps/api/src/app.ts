@@ -12,7 +12,7 @@ import type { Config } from "./config.js";
 import { validSignature } from "./crypto.js";
 import type { BusinessConfig, Call, DograhEvent, Repository, Role, User } from "./domain.js";
 import { normalizeCanadianNumber } from "./phone.js";
-import { CallService, CallSummaryService, DograhClient, OutboxWorker, stableInstructionId, TelephonyClient, WhatsAppClient } from "./services.js";
+import { CallService, CallSummaryService, DeepgramVoiceInstructionTranscriber, DograhClient, type InstructionClient, OutboxWorker, stableInstructionId, TelephonyClient, type VoiceInstructionTranscriber, WhatsAppClient } from "./services.js";
 
 declare module "fastify" { interface FastifyRequest { rawBody?: string | Buffer } }
 
@@ -28,11 +28,18 @@ const dograhEventSchema = z.object({
 });
 
 type Principal = { user: User; sessionId: string; csrfToken: string };
-type DependencyOverrides = { dograh?: DograhClient; telephony?: TelephonyClient; whatsapp?: WhatsAppClient };
+type DependencyOverrides = { dograh?: InstructionClient; telephony?: TelephonyClient; whatsapp?: WhatsAppClient; transcriber?: VoiceInstructionTranscriber };
+const MAX_VOICE_INSTRUCTION_BYTES = 10 * 1024 * 1024;
+const supportedVoiceMimeTypes = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav"]);
 
 export async function createApp(repo: Repository, config: Config, overrides: DependencyOverrides = {}) {
   const app = Fastify({ logger: config.NODE_ENV !== "test", trustProxy: config.NODE_ENV === "production" });
-  const clients = { dograh: overrides.dograh ?? new DograhClient(config), telephony: overrides.telephony ?? new TelephonyClient(config), whatsapp: overrides.whatsapp ?? new WhatsAppClient(config) };
+  const clients = {
+    dograh: overrides.dograh ?? new DograhClient(config),
+    telephony: overrides.telephony ?? new TelephonyClient(config),
+    transcriber: overrides.transcriber ?? new DeepgramVoiceInstructionTranscriber(config),
+    whatsapp: overrides.whatsapp ?? new WhatsAppClient(config)
+  };
   const sockets = new Set<any>();
   const broadcast = (event: string, payload: unknown) => {
     const data = JSON.stringify({ event, payload });
@@ -45,6 +52,7 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
   await app.register(rateLimit, { global: true, max: 120, timeWindow: "1 minute" });
   await app.register(websocket);
   await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
+  app.addContentTypeParser(/^audio\/(webm|ogg|mp4|mpeg|wav)(?:;.*)?$/i, { parseAs: "buffer", bodyLimit: MAX_VOICE_INSTRUCTION_BYTES }, (_request, body, done) => done(null, body));
   await app.register(staticFiles, { root: path.resolve(process.cwd(), "apps/console/dist"), prefix: "/", wildcard: false, decorateReply: false });
 
   async function principal(request: FastifyRequest): Promise<Principal | undefined> {
@@ -63,6 +71,21 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
     return p;
   }
   async function getCall(callId: string) { const call = await repo.getCall(callId); if (!call) fail(404, "Call not found"); return call; }
+  async function injectOperatorInstruction(call: Call, text: string, principal: Principal, source: "operator_console" | "operator_voice", auditAction: "call.inject" | "call.voice_inject") {
+    const instructionId = randomUUID();
+    const message = { id: randomUUID(), callId: call.id, speaker: "operator" as const, text, source, occurredAt: new Date().toISOString() };
+    await repo.addTranscript(message);
+    await repo.writeAudit(auditAction, principal.user.id, call.id, { instructionId });
+    broadcast("transcript.message", message);
+    try {
+      const result = await clients.dograh.inject(call, text, instructionId);
+      broadcast("injection.status", { callId: call.id, instructionId, status: "accepted", source });
+      return { ...result, text };
+    } catch (error) {
+      broadcast("injection.status", { callId: call.id, instructionId, status: "failed", source });
+      throw error;
+    }
+  }
 
   app.get("/health", async () => ({ status: "ok", service: "cooper2talk", timestamp: new Date().toISOString(), configured: { dograh: Boolean(config.DOGRAH_BASE_URL && config.DOGRAH_EVENT_SECRET), twilio: Boolean(config.TWILIO_ACCOUNT_SID && config.TWILIO_AUTH_TOKEN), telnyx: Boolean(config.TELNYX_API_KEY), whatsapp: Boolean(config.WHATSAPP_ACCESS_TOKEN && config.WHATSAPP_PHONE_NUMBER_ID), database: Boolean(config.DATABASE_URL) } }));
 
@@ -87,11 +110,19 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
   app.post("/api/calls/:callId/injections", async (request) => {
     const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); if (call.status !== "active") fail(409, "Call is not active");
     const injectionBody = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
-    const { text } = injectionSchema.parse(injectionBody); const instructionId = randomUUID();
-    const message = { id: randomUUID(), callId: call.id, speaker: "operator" as const, text, source: "operator_console" as const, occurredAt: new Date().toISOString() };
-    await repo.addTranscript(message); await repo.writeAudit("call.inject", p.user.id, call.id, { instructionId }); broadcast("transcript.message", message);
-    try { const result = await clients.dograh.inject(call, text, instructionId); broadcast("injection.status", { callId: call.id, instructionId, status: "accepted" }); return replyStatus(202, result); }
-    catch (error) { broadcast("injection.status", { callId: call.id, instructionId, status: "failed" }); throw error; }
+    const { text } = injectionSchema.parse(injectionBody);
+    return replyStatus(202, await injectOperatorInstruction(call, text, p, "operator_console", "call.inject"));
+  });
+  app.post("/api/calls/:callId/voice-instructions", async (request) => {
+    const p = await requireUser(request, ["admin", "supervisor"]);
+    const call = await getCall((request.params as any).callId);
+    if (call.status !== "active") fail(409, "Call is not active");
+    const mimeType = String(request.headers["content-type"] ?? "").split(";", 1)[0].toLowerCase();
+    if (!supportedVoiceMimeTypes.has(mimeType)) fail(415, "Unsupported voice recording format");
+    if (!Buffer.isBuffer(request.body) || request.body.length === 0) fail(400, "Voice recording is empty");
+    if (request.body.length > MAX_VOICE_INSTRUCTION_BYTES) fail(413, "Voice recording is too large");
+    const text = await clients.transcriber.transcribe(request.body, mimeType);
+    return replyStatus(202, await injectOperatorInstruction(call, text, p, "operator_voice", "call.voice_inject"));
   });
   app.post("/api/calls/:callId/transfer", async (request) => { const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); const { destination } = transferSchema.parse(request.body); const result = await clients.telephony.transfer(call, destination); call.status = "transferred"; await repo.saveCall(call); await repo.writeAudit("call.transfer", p.user.id, call.id, { provider: call.provider, destination: result.destination }); broadcast("call.updated", call); return result; });
   app.post("/api/calls/:callId/end", async (request) => { const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); const result = await clients.telephony.end(call); await repo.writeAudit("call.end", p.user.id, call.id, { provider: call.provider }); return result; });
@@ -128,7 +159,7 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
 function publicUser(user: User) { return { id: user.id, email: user.email, role: user.role }; }
 function fail(statusCode: number, message: string): never { throw Object.assign(new Error(message), { statusCode }); }
 function replyStatus(status: number, payload: unknown) { return { status, ...payload as any }; }
-async function handleWhatsAppMessage(message: any, callService: CallService, repo: Repository, config: Config, dograh: DograhClient, broadcast: (event: string, payload: unknown) => void) {
+async function handleWhatsAppMessage(message: any, callService: CallService, repo: Repository, config: Config, dograh: InstructionClient, broadcast: (event: string, payload: unknown) => void) {
   const from = normalizeCanadianNumber(message.from);
   if (!from || !config.operatorNumbers.has(from) || message.type !== "text") return;
   const replyTo = message.context?.id as string | undefined;

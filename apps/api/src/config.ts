@@ -17,6 +17,7 @@ const schema = z.object({
   DOGRAH_BASE_URL: z.string().url().optional(),
   DOGRAH_API_KEY: z.string().optional(),
   DOGRAH_EVENT_SECRET: z.string().min(16).default("development-dograh-event-secret"),
+  DEEPGRAM_API_KEY: z.string().optional(),
   GROQ_API_KEY: z.string().optional(),
   TWILIO_ACCOUNT_SID: z.string().optional(),
   TWILIO_AUTH_TOKEN: z.string().optional(),

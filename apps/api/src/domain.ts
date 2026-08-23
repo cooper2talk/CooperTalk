@@ -47,7 +47,7 @@ export interface TranscriptMessage {
   callId: string;
   speaker: Speaker;
   text: string;
-  source: "dograh" | "operator_console" | "whatsapp";
+  source: "dograh" | "operator_console" | "operator_voice" | "whatsapp";
   occurredAt: string;
   interrupted?: boolean;
 }

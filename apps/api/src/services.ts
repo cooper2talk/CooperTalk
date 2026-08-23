@@ -3,7 +3,15 @@ import type { Config } from "./config.js";
 import type { Call, DograhEvent, OutboundMessage, Repository, TranscriptMessage } from "./domain.js";
 import { chooseOriginalCaller, normalizeCanadianNumber } from "./phone.js";
 
-export class DograhClient {
+export interface InstructionClient {
+  inject(call: Call, text: string, instructionId?: string): Promise<{ accepted: boolean; instructionId: string; simulated: boolean }>;
+}
+
+export interface VoiceInstructionTranscriber {
+  transcribe(audio: Buffer, mimeType: string): Promise<string>;
+}
+
+export class DograhClient implements InstructionClient {
   constructor(private readonly config: Config) {}
   async inject(call: Call, text: string, instructionId: string = randomUUID()) {
     if (!this.config.DOGRAH_BASE_URL || !this.config.DOGRAH_EVENT_SECRET) return { accepted: true, instructionId, simulated: true };
@@ -79,6 +87,35 @@ export type SummaryLanguage = "english" | "hinglish";
 export type CallSummary = { language: SummaryLanguage; update: string; urgency: string; source: "ai" | "fallback" };
 export interface CallSummaryGenerator {
   generate(call: Call, transcript: TranscriptMessage[]): Promise<CallSummary>;
+}
+
+/**
+ * Transcribes a short, in-memory browser recording. The recording is never
+ * written to disk or the database; only its recognized text is returned.
+ */
+export class DeepgramVoiceInstructionTranscriber implements VoiceInstructionTranscriber {
+  constructor(private readonly config: Config, private readonly request: typeof fetch = fetch) {}
+
+  async transcribe(audio: Buffer, mimeType: string) {
+    if (!this.config.DEEPGRAM_API_KEY) throw Object.assign(new Error("Voice instructions require a Deepgram API key"), { statusCode: 503 });
+    const query = new URLSearchParams({ model: "nova-3-general", language: "multi", smart_format: "true" });
+    let response: Response;
+    try {
+      response = await this.request(`https://api.deepgram.com/v1/listen?${query}`, {
+        method: "POST",
+        headers: { authorization: `Token ${this.config.DEEPGRAM_API_KEY}`, "content-type": mimeType },
+        body: new Uint8Array(audio),
+        signal: AbortSignal.timeout(30_000)
+      });
+    } catch {
+      throw Object.assign(new Error("Voice transcription service is unavailable"), { statusCode: 502 });
+    }
+    if (!response.ok) throw Object.assign(new Error(`Voice transcription failed (${response.status})`), { statusCode: 502 });
+    const body = await response.json() as { results?: { channels?: Array<{ alternatives?: Array<{ transcript?: string }> }> } };
+    const text = body.results?.channels?.[0]?.alternatives?.[0]?.transcript?.replace(/\s+/g, " ").trim();
+    if (!text) throw Object.assign(new Error("No speech was detected in the recording"), { statusCode: 422 });
+    return text.slice(0, 2000);
+  }
 }
 
 export class CallSummaryService implements CallSummaryGenerator {

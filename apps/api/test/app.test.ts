@@ -4,12 +4,12 @@ import { hmacSha256 } from "../src/crypto.js";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { MemoryRepository } from "../src/repository.js";
-import { CallService, CallSummaryService, OutboxWorker, WhatsAppClient, type CallSummaryGenerator } from "../src/services.js";
+import { CallService, CallSummaryService, OutboxWorker, WhatsAppClient, type CallSummaryGenerator, type VoiceInstructionTranscriber } from "../src/services.js";
 
 const config = loadConfig({ NODE_ENV: "test", PUBLIC_BASE_URL: "http://localhost:3000", SESSION_SECRET: "a-test-session-secret-long-enough", DOGRAH_EVENT_SECRET: "a-test-dograh-event-secret", WHATSAPP_VERIFY_TOKEN: "a-test-whatsapp-verify-token", ADMIN_EMAIL: "admin@example.ca", ADMIN_PASSWORD: "secure-demo-password", OPERATOR_NUMBERS: "+16474727980", WHATSAPP_SUMMARY_DELAY_SECONDS: "0", WHATSAPP_ALERT_ROUTES: JSON.stringify({ "+17053004321": { agentLabel: "Emma — Canadian Receptionist", callSummary: true }, "+14095060390": { agentLabel: "Nichole — ExcelLinx Project Manager Assistant", callSummary: false } }) });
 const fallbackSummaryGenerator: CallSummaryGenerator = { generate: async () => ({ language: "english", update: "Fallback summary.", urgency: "Not stated", source: "fallback" }) };
 
-async function setup() { const app = await createApp(new MemoryRepository(), config); return app; }
+async function setup(overrides: { transcriber?: VoiceInstructionTranscriber } = {}) { const app = await createApp(new MemoryRepository(), config, overrides); return app; }
 function cookie(response: any) { return String(response.headers["set-cookie"]).split(";")[0]; }
 function event() { return { id: "evt-1", type: "call.started", occurredAt: "2026-08-15T12:00:00.000Z", call: { dograhRunId: "run-42", twilioCallSid: "CA123", from: "4165550100", to: "7372508034", forwardedFrom: "6475550101" } }; }
 function telnyxEvent() { return { id: "evt-telnyx-1", type: "call.started", occurredAt: "2026-08-15T12:01:00.000Z", call: { dograhRunId: "run-telnyx-42", provider: "telnyx", providerCallId: "v3:call-control-id", callLegId: "v3:call-leg-id", callSessionId: "v3:call-session-id", from: "4095060390", to: "4095060390", metadata: { workflowName: "Nichole - ExcelLinx Project Manager Assistant" } } }; }
@@ -86,6 +86,23 @@ test("missing Meta sender credentials fail the queued alert instead of simulatin
   assert.equal(message.externalId, undefined);
   assert.equal(message.attempts, 1);
   assert.equal(message.lastError, "WhatsApp Cloud API sender credentials are not configured");
+});
+
+test("voice instruction transcribes in memory and uses the normal injection path", async () => {
+  const transcriber: VoiceInstructionTranscriber = { transcribe: async (audio, mimeType) => { assert.equal(mimeType, "audio/webm"); assert.deepEqual([...audio], [1, 2, 3]); return "Please tell them we close at four."; } };
+  const app = await setup({ transcriber }); const payload = JSON.stringify(event()); const signature = `sha256=${hmacSha256(config.DOGRAH_EVENT_SECRET, payload)}`;
+  await app.inject({ method: "POST", url: "/internal/dograh/events", payload, headers: { "content-type": "application/json", "x-cooper-signature": signature } });
+  const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { email: "admin@example.ca", password: "secure-demo-password" } });
+  const csrf = login.json().csrfToken; const call = (await app.inject({ method: "GET", url: "/api/calls", headers: { cookie: cookie(login) } })).json().calls[0];
+  const rejected = await app.inject({ method: "POST", url: `/api/calls/${call.id}/voice-instructions`, payload: Buffer.from([1, 2, 3]), headers: { cookie: cookie(login), "content-type": "audio/webm" } });
+  assert.equal(rejected.statusCode, 403);
+  const accepted = await app.inject({ method: "POST", url: `/api/calls/${call.id}/voice-instructions`, payload: Buffer.from([1, 2, 3]), headers: { cookie: cookie(login), "content-type": "audio/webm", "x-csrf-token": csrf } });
+  assert.equal(accepted.statusCode, 200); assert.equal(accepted.json().text, "Please tell them we close at four.");
+  const details = await app.inject({ method: "GET", url: `/api/calls/${call.id}`, headers: { cookie: cookie(login) } });
+  assert.equal(details.json().transcript[0].source, "operator_voice");
+  const unsupported = await app.inject({ method: "POST", url: `/api/calls/${call.id}/voice-instructions`, payload: Buffer.from([1]), headers: { cookie: cookie(login), "content-type": "application/octet-stream", "x-csrf-token": csrf } });
+  assert.equal(unsupported.statusCode, 415);
+  await app.close();
 });
 
 test("Emma call completion queues one Hinglish summary and sends it through the approved template", async () => {
