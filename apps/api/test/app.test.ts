@@ -4,9 +4,10 @@ import { hmacSha256 } from "../src/crypto.js";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { MemoryRepository } from "../src/repository.js";
-import { CallService, OutboxWorker, WhatsAppClient } from "../src/services.js";
+import { CallService, CallSummaryService, OutboxWorker, WhatsAppClient, type CallSummaryGenerator } from "../src/services.js";
 
-const config = loadConfig({ NODE_ENV: "test", PUBLIC_BASE_URL: "http://localhost:3000", SESSION_SECRET: "a-test-session-secret-long-enough", DOGRAH_EVENT_SECRET: "a-test-dograh-event-secret", WHATSAPP_VERIFY_TOKEN: "a-test-whatsapp-verify-token", ADMIN_EMAIL: "admin@example.ca", ADMIN_PASSWORD: "secure-demo-password", OPERATOR_NUMBERS: "+16474727980", WHATSAPP_ALERT_ROUTES: JSON.stringify({ "+17053004321": { agentLabel: "Emma — Canadian Receptionist" }, "+14095060390": { agentLabel: "Nichole — ExcelLinx Project Manager Assistant" } }) });
+const config = loadConfig({ NODE_ENV: "test", PUBLIC_BASE_URL: "http://localhost:3000", SESSION_SECRET: "a-test-session-secret-long-enough", DOGRAH_EVENT_SECRET: "a-test-dograh-event-secret", WHATSAPP_VERIFY_TOKEN: "a-test-whatsapp-verify-token", ADMIN_EMAIL: "admin@example.ca", ADMIN_PASSWORD: "secure-demo-password", OPERATOR_NUMBERS: "+16474727980", WHATSAPP_SUMMARY_DELAY_SECONDS: "0", WHATSAPP_ALERT_ROUTES: JSON.stringify({ "+17053004321": { agentLabel: "Emma — Canadian Receptionist", callSummary: true }, "+14095060390": { agentLabel: "Nichole — ExcelLinx Project Manager Assistant", callSummary: false } }) });
+const fallbackSummaryGenerator: CallSummaryGenerator = { generate: async () => ({ language: "english", update: "Fallback summary.", urgency: "Not stated", source: "fallback" }) };
 
 async function setup() { const app = await createApp(new MemoryRepository(), config); return app; }
 function cookie(response: any) { return String(response.headers["set-cookie"]).split(";")[0]; }
@@ -78,11 +79,47 @@ test("missing Meta sender credentials fail the queued alert instead of simulatin
   const repo = new MemoryRepository();
   const service = new CallService(repo, config, () => {});
   await service.ingest(telnyxEvent());
-  const worker = new OutboxWorker(repo, new WhatsAppClient(config));
+  const worker = new OutboxWorker(repo, new WhatsAppClient(config), fallbackSummaryGenerator);
   assert.equal(await worker.processOne(), true);
   const message = [...repo.outbound.values()][0];
   assert.equal(message.deliveredAt, undefined);
   assert.equal(message.externalId, undefined);
   assert.equal(message.attempts, 1);
   assert.equal(message.lastError, "WhatsApp Cloud API sender credentials are not configured");
+});
+
+test("Emma call completion queues one Hinglish summary and sends it through the approved template", async () => {
+  const repo = new MemoryRepository();
+  const service = new CallService(repo, config, () => {});
+  const call = { ...event(), id: "evt-emma-start", call: { ...event().call, dograhRunId: "run-emma-summary", to: "7053004321", from: "4165550100" } };
+  await service.ingest(call);
+  await service.ingest({ id: "evt-emma-turn", type: "transcript.final", occurredAt: "2026-08-15T12:00:04.000Z", call: call.call, payload: { speaker: "caller", text: "Mujhe closing documents ke baare mein follow-up chahiye." } });
+  await service.ingest({ id: "evt-emma-end", type: "call.ended", occurredAt: "2026-08-15T12:01:00.000Z", call: call.call });
+  await service.ingest({ id: "evt-emma-end-duplicate", type: "call.ended", occurredAt: "2026-08-15T12:01:00.000Z", call: call.call });
+
+  const queued = [...repo.outbound.values()].filter((message) => message.kind === "whatsapp_summary");
+  assert.equal(queued.length, 1);
+  const sent: Record<string, any>[] = [];
+  const whatsapp = {
+    alertBody: () => ({ type: "template", template: { name: "cooper_live_call_alert" } }),
+    summaryBody: (_to: string, _call: unknown, summary: any) => ({ type: "template", template: { name: "cooper_call_summary", components: [{ type: "body", parameters: [{ text: "Caller" }, { text: "1m 0s" }, { text: summary.update }, { text: summary.urgency }] }] } }),
+    send: async (body: Record<string, unknown>) => { sent.push(body); return { externalId: "wamid-" + sent.length }; }
+  } as unknown as WhatsAppClient;
+  const summaries: CallSummaryGenerator = { generate: async () => ({ language: "hinglish", update: "Caller ne closing documents ke baare mein follow-up manga hai.", urgency: "Mention nahi hua", source: "ai" }) };
+  const worker = new OutboxWorker(repo, whatsapp, summaries);
+  await worker.processOne();
+  await worker.processOne();
+  assert.equal(sent[1].template.name, "cooper_call_summary");
+  assert.equal(sent[1].template.components[0].parameters[2].text, "Caller ne closing documents ke baare mein follow-up manga hai.");
+});
+
+test("summary fallback preserves Hinglish or English caller text when Groq is unavailable", async () => {
+  const call = { id: "summary-call", dograhRunId: "summary-run", provider: "telnyx" as const, status: "completed" as const, startedAt: "2026-08-15T12:00:00.000Z", endedAt: "2026-08-15T12:01:00.000Z", metadata: {} };
+  const failing = new CallSummaryService(loadConfig({ ...config, GROQ_API_KEY: "test-key" }), async () => new Response("rate limited", { status: 429 }));
+  const hinglish = await failing.generate(call, [{ id: "t1", callId: call.id, speaker: "caller", source: "dograh", occurredAt: call.startedAt, text: "Mujhe documents ke baare mein baat karni hai." }]);
+  const english = await failing.generate(call, [{ id: "t2", callId: call.id, speaker: "caller", source: "dograh", occurredAt: call.startedAt, text: "I need to discuss the closing documents." }]);
+  assert.deepEqual({ language: hinglish.language, source: hinglish.source }, { language: "hinglish", source: "fallback" });
+  assert.match(hinglish.update, /Mujhe documents/);
+  assert.deepEqual({ language: english.language, source: english.source }, { language: "english", source: "fallback" });
+  assert.match(english.update, /closing documents/);
 });

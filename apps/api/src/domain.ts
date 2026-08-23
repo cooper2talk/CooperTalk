@@ -55,7 +55,7 @@ export interface TranscriptMessage {
 export interface OutboundMessage {
   id: string;
   callId: string;
-  kind: "whatsapp_alert" | "whatsapp_transcript" | "whatsapp_status";
+  kind: "whatsapp_alert" | "whatsapp_summary" | "whatsapp_transcript" | "whatsapp_status";
   body: Record<string, unknown>;
   attempts: number;
   availableAt: string;
@@ -118,6 +118,7 @@ export interface Repository {
   listTranscript(callId: string): Promise<TranscriptMessage[]>;
   markEventProcessed(id: string): Promise<boolean>;
   queueOutbound(message: OutboundMessage): Promise<void>;
+  hasOutboundKind(callId: string, kind: OutboundMessage["kind"]): Promise<boolean>;
   listOutboundForCall(callId: string): Promise<OutboundMessage[]>;
   claimOutbound(now: string): Promise<OutboundMessage | undefined>;
   saveOutbound(message: OutboundMessage): Promise<void>;

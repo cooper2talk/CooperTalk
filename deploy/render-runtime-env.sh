@@ -76,7 +76,9 @@ set_value WHATSAPP_ACCESS_TOKEN "$(optional_secret_value cooper-whatsapp-access-
 set_value WHATSAPP_PHONE_NUMBER_ID "$(optional_secret_value cooper-whatsapp-phone-number-id)"
 set_value WHATSAPP_APP_SECRET "$(optional_secret_value cooper-whatsapp-app-secret)"
 set_value WHATSAPP_ALERT_TEMPLATE "${WHATSAPP_ALERT_TEMPLATE:-cooper_live_call_alert}"
-whatsapp_alert_routes_default='{"+17053004321":{"agentLabel":"Emma — Canadian Receptionist"},"+14095060390":{"agentLabel":"Nichole — ExcelLinx Project Manager Assistant"}}'
+set_value WHATSAPP_SUMMARY_TEMPLATE "${WHATSAPP_SUMMARY_TEMPLATE:-cooper_call_summary}"
+set_value WHATSAPP_SUMMARY_DELAY_SECONDS "${WHATSAPP_SUMMARY_DELAY_SECONDS:-5}"
+whatsapp_alert_routes_default='{"+17053004321":{"agentLabel":"Emma — Canadian Receptionist","callSummary":true},"+14095060390":{"agentLabel":"Nichole — ExcelLinx Project Manager Assistant","callSummary":false}}'
 set_value WHATSAPP_ALERT_ROUTES "${WHATSAPP_ALERT_ROUTES:-$whatsapp_alert_routes_default}"
 set_value OPERATOR_NUMBERS "${OPERATOR_NUMBERS:-+16474727980}"
 

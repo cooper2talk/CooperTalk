@@ -75,6 +75,95 @@ export class TelephonyClient {
   transfer(call: Call, destination: string) { return call.provider === "telnyx" ? this.telnyx.transfer(call, destination) : this.twilio.transfer(call, destination); }
 }
 
+export type SummaryLanguage = "english" | "hinglish";
+export type CallSummary = { language: SummaryLanguage; update: string; urgency: string; source: "ai" | "fallback" };
+export interface CallSummaryGenerator {
+  generate(call: Call, transcript: TranscriptMessage[]): Promise<CallSummary>;
+}
+
+export class CallSummaryService implements CallSummaryGenerator {
+  constructor(private readonly config: Config, private readonly request: typeof fetch = fetch) {}
+
+  async generate(call: Call, transcript: TranscriptMessage[]): Promise<CallSummary> {
+    const callerText = transcript.filter((message) => message.speaker === "caller").map((message) => message.text).join("\n");
+    const fallback = fallbackSummary(callerText);
+    if (!this.config.GROQ_API_KEY || !callerText.trim()) return fallback;
+
+    const dialogue = transcript
+      .filter((message) => message.speaker === "caller" || message.speaker === "assistant")
+      .slice(-24)
+      .map((message) => `${message.speaker === "caller" ? "Caller" : "Emma"}: ${message.text}`)
+      .join("\n")
+      .slice(-12000);
+    try {
+      const response = await this.request("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: { authorization: `Bearer ${this.config.GROQ_API_KEY}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "openai/gpt-oss-120b",
+          temperature: 0.1,
+          max_tokens: 160,
+          response_format: { type: "json_object" },
+          messages: [
+            {
+              role: "system",
+              content: "Create a factual call-close WhatsApp summary from the transcript. Return JSON only: {\"language\":\"english|hinglish\",\"update\":\"...\",\"urgency\":\"...\"}. Determine language only from caller turns: use hinglish when the caller uses Hindi, Hinglish, or a mix; otherwise english. Hinglish must use Latin script, not Devanagari. Keep update under 360 characters. Preserve phone numbers, codes, and reference numbers as digits. Include only facts actually stated. Never promise a callback, action, availability, or urgency. Use urgency \"Not stated\" in English or \"Mention nahi hua\" in Hinglish unless urgency was explicitly stated."
+            },
+            { role: "user", content: dialogue }
+          ]
+        })
+      });
+      if (!response.ok) throw new Error(`Groq summary failed (${response.status})`);
+      const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+      const content = json.choices?.[0]?.message?.content;
+      if (!content) throw new Error("Groq summary returned no content");
+      const parsed = JSON.parse(stripCodeFence(content)) as Partial<CallSummary>;
+      const language: SummaryLanguage = parsed.language === "hinglish" ? "hinglish" : parsed.language === "english" ? "english" : fallback.language;
+      const update = cleanSummaryText(parsed.update);
+      if (!update) throw new Error("Groq summary did not include an update");
+      return {
+        language,
+        update,
+        urgency: cleanSummaryText(parsed.urgency) || (language === "hinglish" ? "Mention nahi hua" : "Not stated"),
+        source: "ai"
+      };
+    } catch {
+      return fallback;
+    }
+  }
+}
+
+function stripCodeFence(value: string) {
+  return value.trim().replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\s*\`\`\`$/, "");
+}
+
+function cleanSummaryText(value: unknown) {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 360) : "";
+}
+
+function fallbackSummary(callerText: string): CallSummary {
+  const language = detectCallerLanguage(callerText);
+  const lastCallerText = callerText.split(/\n+/).filter(Boolean).slice(-2).join(" ").replace(/\s+/g, " ").trim().slice(0, 360);
+  const statedUrgency = /\b(urgent|urgency|asap|emergency|immediately|jaldi|zaroori|fauran)\b/i.test(callerText);
+  return {
+    language,
+    update: lastCallerText || (language === "hinglish" ? "Caller ki transcript available nahi thi. Cooper2Talk mein full transcript dekhein." : "No caller transcript was available. Review the full transcript in Cooper2Talk."),
+    urgency: statedUrgency ? (language === "hinglish" ? "Caller ne urgent bataya" : "Caller stated this is urgent") : (language === "hinglish" ? "Mention nahi hua" : "Not stated"),
+    source: "fallback"
+  };
+}
+
+function detectCallerLanguage(value: string): SummaryLanguage {
+  if (/[\u0900-\u097f]/.test(value)) return "hinglish";
+  return /\b(mujhe|main|mein|hai|hain|nahi|nahin|aap|aapka|aapki|ka|ki|ke|karna|karo|bata|jaldi|zaroori|kripya)\b/i.test(value) ? "hinglish" : "english";
+}
+
+function callDuration(call: Call) {
+  if (!call.endedAt) return "Not available";
+  const seconds = Math.max(0, Math.round((Date.parse(call.endedAt) - Date.parse(call.startedAt)) / 1000));
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+}
+
 export class WhatsAppClient {
   constructor(private readonly config: Config) {}
   async send(body: Record<string, unknown>) {
@@ -85,6 +174,26 @@ export class WhatsAppClient {
     return { externalId: json.messages?.[0]?.id ?? `unknown-${randomUUID()}` };
   }
   alertBody(to: string, call: Call, agentLabel: string) { return { messaging_product: "whatsapp", to: to.replace(/^\+/, ""), type: "template", template: { name: this.config.WHATSAPP_ALERT_TEMPLATE, language: { code: "en" }, components: [{ type: "body", parameters: [{ type: "text", text: agentLabel }, { type: "text", text: call.toNumber ?? "unknown number" }, { type: "text", text: call.originalCaller ?? call.fromNumber ?? "unknown caller" }] }] } }; }
+  summaryBody(to: string, call: Call, summary: CallSummary) {
+    return {
+      messaging_product: "whatsapp",
+      to: to.replace(/^\+/, ""),
+      type: "template",
+      template: {
+        name: this.config.WHATSAPP_SUMMARY_TEMPLATE,
+        language: { code: "en_US" },
+        components: [{
+          type: "body",
+          parameters: [
+            { type: "text", text: call.originalCaller ?? call.fromNumber ?? "Unknown caller" },
+            { type: "text", text: callDuration(call) },
+            { type: "text", text: summary.update },
+            { type: "text", text: summary.urgency }
+          ]
+        }]
+      }
+    };
+  }
 }
 
 export type Broadcast = (event: string, payload: unknown) => void;
@@ -117,6 +226,23 @@ export class CallService {
       await this.repo.addTranscript(message);
       this.broadcast("transcript.message", message);
     }
+    if (event.type === "call.ended") {
+      const alertRoute = call.toNumber ? this.config.whatsappAlertRoutes.get(call.toNumber) : undefined;
+      if (!browserTest && alertRoute?.callSummary && !(await this.repo.hasOutboundKind(call.id, "whatsapp_summary"))) {
+        const availableAt = new Date(Date.now() + this.config.WHATSAPP_SUMMARY_DELAY_SECONDS * 1000).toISOString();
+        const operator = [...this.config.operatorNumbers][0];
+        if (operator) {
+          await this.repo.queueOutbound({
+            id: randomUUID(),
+            callId: call.id,
+            kind: "whatsapp_summary",
+            body: { operator, agentLabel: alertRoute.agentLabel },
+            attempts: 0,
+            availableAt
+          });
+        }
+      }
+    }
     this.broadcast("call.updated", call);
     return { duplicate: false, call };
   }
@@ -124,13 +250,31 @@ export class CallService {
 }
 
 export class OutboxWorker {
-  constructor(private readonly repo: Repository, private readonly whatsapp: WhatsAppClient) {}
+  constructor(
+    private readonly repo: Repository,
+    private readonly whatsapp: WhatsAppClient,
+    private readonly summaries: CallSummaryGenerator
+  ) {}
   async processOne() {
     const message = await this.repo.claimOutbound(new Date().toISOString());
     if (!message) return false;
     try {
-      if (message.kind !== "whatsapp_alert") throw new Error("Only approved WhatsApp call-alert templates may be delivered");
-      const body = this.whatsapp.alertBody((message.body as any).operator, (message.body as any).call, (message.body as any).agentLabel);
+      let body: Record<string, unknown>;
+      if (message.kind === "whatsapp_alert") {
+        body = this.whatsapp.alertBody((message.body as any).operator, (message.body as any).call, (message.body as any).agentLabel);
+      } else if (message.kind === "whatsapp_summary") {
+        const call = await this.repo.getCall(message.callId);
+        if (!call) throw new Error("Call no longer exists for WhatsApp summary");
+        let summary = (message.body as any).summary as CallSummary | undefined;
+        if (!summary) {
+          summary = await this.summaries.generate(call, await this.repo.listTranscript(call.id));
+          message.body = { ...message.body, summary };
+          await this.repo.saveOutbound(message);
+        }
+        body = this.whatsapp.summaryBody((message.body as any).operator, call, summary);
+      } else {
+        throw new Error("Unsupported WhatsApp outbox message kind");
+      }
       const result = await this.whatsapp.send(body);
       message.externalId = result.externalId;
       message.deliveredAt = new Date().toISOString();

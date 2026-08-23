@@ -12,7 +12,7 @@ import type { Config } from "./config.js";
 import { validSignature } from "./crypto.js";
 import type { BusinessConfig, Call, DograhEvent, Repository, Role, User } from "./domain.js";
 import { normalizeCanadianNumber } from "./phone.js";
-import { CallService, DograhClient, OutboxWorker, stableInstructionId, TelephonyClient, WhatsAppClient } from "./services.js";
+import { CallService, CallSummaryService, DograhClient, OutboxWorker, stableInstructionId, TelephonyClient, WhatsAppClient } from "./services.js";
 
 declare module "fastify" { interface FastifyRequest { rawBody?: string | Buffer } }
 
@@ -39,7 +39,7 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
     for (const socket of sockets) if (socket.readyState === socket.OPEN) socket.send(data);
   };
   const callService = new CallService(repo, config, broadcast);
-  const outbox = new OutboxWorker(repo, clients.whatsapp);
+  const outbox = new OutboxWorker(repo, clients.whatsapp, new CallSummaryService(config));
 
   await app.register(cookie, { secret: config.SESSION_SECRET, hook: "onRequest" });
   await app.register(rateLimit, { global: true, max: 120, timeWindow: "1 minute" });

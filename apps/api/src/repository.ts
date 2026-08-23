@@ -28,6 +28,7 @@ export class MemoryRepository implements Repository {
   async listTranscript(callId: string) { return structuredClone(this.messages.get(callId) ?? []); }
   async markEventProcessed(id: string) { if (this.processed.has(id)) return false; this.processed.add(id); return true; }
   async queueOutbound(message: OutboundMessage) { this.outbound.set(message.id, structuredClone(message)); }
+  async hasOutboundKind(callId: string, kind: OutboundMessage["kind"]) { return [...this.outbound.values()].some((message) => message.callId === callId && message.kind === kind); }
   async listOutboundForCall(callId: string) { return [...this.outbound.values()].filter((message) => message.callId === callId).map((message) => structuredClone(message)); }
   async claimOutbound(now: string) { return [...this.outbound.values()].find((m) => !m.deliveredAt && !m.failedAt && m.availableAt <= now); }
   async saveOutbound(message: OutboundMessage) { this.outbound.set(message.id, structuredClone(message)); }
@@ -55,6 +56,7 @@ export class PostgresRepository implements Repository {
       CREATE TABLE IF NOT EXISTS business_config (id boolean PRIMARY KEY DEFAULT true CHECK(id), value jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
       CREATE INDEX IF NOT EXISTS idx_transcript_call ON transcript_messages(call_id, occurred_at);
       CREATE INDEX IF NOT EXISTS idx_outbound_ready ON outbound_messages(available_at) WHERE delivered_at IS NULL AND failed_at IS NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_summary_per_call ON outbound_messages(call_id) WHERE kind = 'whatsapp_summary';
       ALTER TABLE calls ADD COLUMN IF NOT EXISTS provider text;
       ALTER TABLE calls ADD COLUMN IF NOT EXISTS provider_call_id text;
       ALTER TABLE calls ADD COLUMN IF NOT EXISTS call_leg_id text;
@@ -80,11 +82,12 @@ export class PostgresRepository implements Repository {
   async addTranscript(m: TranscriptMessage) { await this.pool.query("INSERT INTO transcript_messages VALUES ($1,$2,$3,$4,$5,$6,$7)",[m.id,m.callId,m.speaker,m.text,m.source,m.occurredAt,Boolean(m.interrupted)]); }
   async listTranscript(callId: string) { const q=await this.pool.query("SELECT * FROM transcript_messages WHERE call_id=$1 ORDER BY occurred_at",[callId]); return q.rows.map((r)=>({id:r.id,callId:r.call_id,speaker:r.speaker,text:r.text,source:r.source,occurredAt:r.occurred_at.toISOString(),interrupted:r.interrupted})); }
   async markEventProcessed(id: string) { const q=await this.pool.query("INSERT INTO processed_events(id) VALUES($1) ON CONFLICT DO NOTHING",[id]); return q.rowCount === 1; }
-  async queueOutbound(m: OutboundMessage) { await this.pool.query("INSERT INTO outbound_messages(id,call_id,kind,body,attempts,available_at) VALUES($1,$2,$3,$4,$5,$6)",[m.id,m.callId,m.kind,JSON.stringify(m.body),m.attempts,m.availableAt]); }
+  async queueOutbound(m: OutboundMessage) { await this.pool.query("INSERT INTO outbound_messages(id,call_id,kind,body,attempts,available_at) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING",[m.id,m.callId,m.kind,JSON.stringify(m.body),m.attempts,m.availableAt]); }
+  async hasOutboundKind(callId: string, kind: OutboundMessage["kind"]) { const q = await this.pool.query("SELECT 1 FROM outbound_messages WHERE call_id=$1 AND kind=$2 LIMIT 1", [callId, kind]); return q.rowCount === 1; }
   private toOutbound(row: any): OutboundMessage { return { id: row.id, callId: row.call_id, kind: row.kind, body: row.body, attempts: row.attempts, availableAt: row.available_at.toISOString(), externalId: row.external_id ?? undefined, deliveredAt: row.delivered_at?.toISOString(), failedAt: row.failed_at?.toISOString(), lastError: row.last_error ?? undefined }; }
   async listOutboundForCall(callId: string) { const q = await this.pool.query("SELECT * FROM outbound_messages WHERE call_id=$1 ORDER BY available_at", [callId]); return q.rows.map((row) => this.toOutbound(row)); }
   async claimOutbound(now: string) { const q=await this.pool.query("SELECT * FROM outbound_messages WHERE delivered_at IS NULL AND failed_at IS NULL AND available_at <= $1 ORDER BY available_at LIMIT 1",[now]); return q.rows[0] && this.toOutbound(q.rows[0]); }
-  async saveOutbound(m: OutboundMessage) { await this.pool.query("UPDATE outbound_messages SET attempts=$2,available_at=$3,external_id=$4,delivered_at=$5,failed_at=$6,last_error=$7 WHERE id=$1",[m.id,m.attempts,m.availableAt,m.externalId,m.deliveredAt,m.failedAt,m.lastError]); }
+  async saveOutbound(m: OutboundMessage) { await this.pool.query("UPDATE outbound_messages SET body=$2,attempts=$3,available_at=$4,external_id=$5,delivered_at=$6,failed_at=$7,last_error=$8 WHERE id=$1",[m.id,JSON.stringify(m.body),m.attempts,m.availableAt,m.externalId,m.deliveredAt,m.failedAt,m.lastError]); }
   async findCallByWhatsAppMessage(messageId: string) { const q=await this.pool.query("SELECT c.* FROM whatsapp_message_map w JOIN calls c ON c.id=w.call_id WHERE w.message_id=$1",[messageId]); return q.rows[0]&&this.toCall(q.rows[0]); }
   async mapWhatsAppMessage(messageId: string, callId: string) { await this.pool.query("INSERT INTO whatsapp_message_map VALUES($1,$2) ON CONFLICT DO NOTHING",[messageId,callId]); }
   async writeAudit(action: string, actorId: string | undefined, callId: string | undefined, details: Record<string, unknown>) { await this.pool.query("INSERT INTO audit_events VALUES($1,$2,$3,$4,$5,now())",[randomUUID(),action,actorId,callId,JSON.stringify(details)]); }
