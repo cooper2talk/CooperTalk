@@ -154,7 +154,7 @@ export class CallSummaryService implements CallSummaryGenerator {
       const json = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
       const content = json.choices?.[0]?.message?.content;
       if (!content) throw new Error("Groq summary returned no content");
-      const parsed = JSON.parse(stripCodeFence(content)) as Partial<CallSummary>;
+      const parsed = parseSummaryJson(content);
       const language: SummaryLanguage = parsed.language === "hinglish" ? "hinglish" : parsed.language === "english" ? "english" : fallback.language;
       const update = cleanSummaryText(parsed.update);
       if (!update) throw new Error("Groq summary did not include an update");
@@ -164,7 +164,9 @@ export class CallSummaryService implements CallSummaryGenerator {
         urgency: cleanSummaryText(parsed.urgency) || (language === "hinglish" ? "Mention nahi hua" : "Not stated"),
         source: "ai"
       };
-    } catch {
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : "Unknown Groq summary error";
+      console.warn(JSON.stringify({ event: "call_summary_fallback", callId: call.id, reason }));
       return fallback;
     }
   }
@@ -174,13 +176,26 @@ function stripCodeFence(value: string) {
   return value.trim().replace(/^\`\`\`(?:json)?\s*/i, "").replace(/\s*\`\`\`$/, "");
 }
 
+function parseSummaryJson(value: string): Partial<CallSummary> {
+  const cleaned = stripCodeFence(value);
+  try { return JSON.parse(cleaned) as Partial<CallSummary>; }
+  catch {
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (firstBrace < 0 || lastBrace <= firstBrace) throw new Error("Groq summary did not return JSON");
+    return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1)) as Partial<CallSummary>;
+  }
+}
+
 function cleanSummaryText(value: unknown) {
   return typeof value === "string" ? value.replace(/\s+/g, " ").trim().slice(0, 360) : "";
 }
 
 function fallbackSummary(callerText: string): CallSummary {
   const language = detectCallerLanguage(callerText);
-  const lastCallerText = callerText.split(/\n+/).filter(Boolean).slice(-2).join(" ").replace(/\s+/g, " ").trim().slice(0, 360);
+  const callerTurns = callerText.split(/\n+/).map((turn) => turn.trim()).filter(Boolean);
+  const substantiveTurns = callerTurns.filter((turn) => !isClosingTurn(turn));
+  const lastCallerText = (substantiveTurns.length ? substantiveTurns : callerTurns).slice(-3).join(" ").replace(/\s+/g, " ").trim().slice(0, 360);
   const statedUrgency = /\b(urgent|urgency|asap|emergency|immediately|jaldi|zaroori|fauran)\b/i.test(callerText);
   return {
     language,
@@ -188,6 +203,11 @@ function fallbackSummary(callerText: string): CallSummary {
     urgency: statedUrgency ? (language === "hinglish" ? "Caller ne urgent bataya" : "Caller stated this is urgent") : (language === "hinglish" ? "Mention nahi hua" : "Not stated"),
     source: "fallback"
   };
+}
+
+function isClosingTurn(value: string) {
+  const normalized = value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+  return /^(?:(?:ok(?:ay)?|bye|thanks?|thank you|take care|good ?night|emma)\s*)+$/i.test(normalized) || /^बस इतना ही(?: काफी)?$/u.test(normalized);
 }
 
 function detectCallerLanguage(value: string): SummaryLanguage {

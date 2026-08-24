@@ -141,6 +141,17 @@ test("summary fallback preserves Hinglish or English caller text when Groq is un
   assert.match(english.update, /closing documents/);
 });
 
+test("summary fallback ignores a final farewell when useful caller details exist", async () => {
+  const call = { id: "summary-fallback-call", dograhRunId: "summary-fallback-run", provider: "telnyx" as const, status: "completed" as const, startedAt: "2026-08-15T12:00:00.000Z", endedAt: "2026-08-15T12:01:00.000Z", metadata: {} };
+  const failing = new CallSummaryService(loadConfig({ ...config, GROQ_API_KEY: "test-key" }), async () => new Response("rate limited", { status: 429 }));
+  const summary = await failing.generate(call, [
+    { id: "t1", callId: call.id, speaker: "caller", source: "dograh", occurredAt: call.startedAt, text: "Please remind Surinder to pick me up at 6 PM." },
+    { id: "t2", callId: call.id, speaker: "caller", source: "dograh", occurredAt: call.startedAt, text: "Ok, bye Emma. Take care. Good night." }
+  ]);
+  assert.match(summary.update, /pick me up at 6 PM/);
+  assert.doesNotMatch(summary.update, /Good night/);
+});
+
 test("summary generator asks Groq for a factual operator handoff from the call conversation", async () => {
   const call = { id: "summary-ai-call", dograhRunId: "summary-ai-run", provider: "telnyx" as const, status: "completed" as const, startedAt: "2026-08-15T12:00:00.000Z", endedAt: "2026-08-15T12:03:00.000Z", metadata: {} };
   let requestBody = "";
@@ -157,4 +168,12 @@ test("summary generator asks Groq for a factual operator handoff from the call c
   assert.match(summary.update, /Toronto property/);
   assert.match(requestBody, /actual reason for calling/);
   assert.match(requestBody, /Caller: I need Surinder/);
+});
+
+test("summary generator accepts JSON surrounded by model commentary", async () => {
+  const call = { id: "summary-json-call", dograhRunId: "summary-json-run", provider: "telnyx" as const, status: "completed" as const, startedAt: "2026-08-15T12:00:00.000Z", endedAt: "2026-08-15T12:01:00.000Z", metadata: {} };
+  const generator = new CallSummaryService(loadConfig({ ...config, GROQ_API_KEY: "test-key" }), async () => new Response(JSON.stringify({ choices: [{ message: { content: 'Result: {"language":"english","update":"Caller requested a document review.","urgency":"Not stated"}' } }] }), { status: 200 }));
+  const summary = await generator.generate(call, [{ id: "t1", callId: call.id, speaker: "caller", source: "dograh", occurredAt: call.startedAt, text: "Please review my documents." }]);
+  assert.equal(summary.source, "ai");
+  assert.equal(summary.update, "Caller requested a document review.");
 });
