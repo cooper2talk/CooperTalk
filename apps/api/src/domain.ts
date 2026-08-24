@@ -19,6 +19,34 @@ export interface Session {
   expiresAt: string;
 }
 
+/** Opaque, rotating credentials used by the native iPhone and Android app. */
+export interface MobileSession {
+  id: string;
+  userId: string;
+  accessTokenHash: string;
+  refreshTokenHash: string;
+  accessExpiresAt: string;
+  refreshExpiresAt: string;
+  createdAt: string;
+  lastUsedAt: string;
+}
+
+export interface MobileDevicePreferences {
+  callAlerts: boolean;
+  summaryAlerts: boolean;
+  deliveryAlerts: boolean;
+}
+
+export interface MobileDevice {
+  id: string;
+  userId: string;
+  pushToken: string;
+  platform: "ios" | "android";
+  preferences: MobileDevicePreferences;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
 export interface Call {
   id: string;
   dograhRunId: string;
@@ -55,7 +83,7 @@ export interface TranscriptMessage {
 export interface OutboundMessage {
   id: string;
   callId: string;
-  kind: "whatsapp_alert" | "whatsapp_summary" | "whatsapp_transcript" | "whatsapp_status";
+  kind: "whatsapp_alert" | "whatsapp_summary" | "whatsapp_transcript" | "whatsapp_status" | "push_call_started" | "push_call_summary" | "push_delivery_failed";
   body: Record<string, unknown>;
   attempts: number;
   availableAt: string;
@@ -110,6 +138,15 @@ export interface Repository {
   createSession(session: Session): Promise<void>;
   getSession(id: string): Promise<Session | undefined>;
   deleteSession(id: string): Promise<void>;
+  createMobileSession(session: MobileSession): Promise<void>;
+  getMobileSessionByAccessHash(accessTokenHash: string): Promise<MobileSession | undefined>;
+  getMobileSessionByRefreshHash(refreshTokenHash: string): Promise<MobileSession | undefined>;
+  saveMobileSession(session: MobileSession): Promise<void>;
+  deleteMobileSession(id: string): Promise<void>;
+  upsertMobileDevice(device: MobileDevice): Promise<MobileDevice>;
+  getMobileDevice(id: string): Promise<MobileDevice | undefined>;
+  listMobileDevices(userId?: string): Promise<MobileDevice[]>;
+  deleteMobileDevice(id: string, userId: string): Promise<void>;
   saveCall(call: Call): Promise<void>;
   getCall(id: string): Promise<Call | undefined>;
   getCallByRunId(runId: string): Promise<Call | undefined>;

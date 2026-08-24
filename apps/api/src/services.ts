@@ -11,6 +11,33 @@ export interface VoiceInstructionTranscriber {
   transcribe(audio: Buffer, mimeType: string): Promise<string>;
 }
 
+export interface PushClient {
+  send(token: string, title: string, body: string, data: Record<string, string>): Promise<{ externalId: string }>;
+}
+
+/** Sends only opaque Expo device tokens; provider credentials never enter the app bundle. */
+export class ExpoPushClient implements PushClient {
+  constructor(private readonly config: Config, private readonly request: typeof fetch = fetch) {}
+  async send(token: string, title: string, body: string, data: Record<string, string>) {
+    if (!this.config.EXPO_PUSH_ENABLED) throw new Error("Mobile push delivery is disabled");
+    if (!/^(ExponentPushToken|ExpoPushToken)\[.+\]$/.test(token)) throw new Error("Invalid Expo push token");
+    let response: Response;
+    try {
+      response = await this.request("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers: { accept: "application/json", "content-type": "application/json" },
+        body: JSON.stringify({ to: token, title, body: body.slice(0, 480), data, sound: "default", priority: "high" }),
+        signal: AbortSignal.timeout(15_000)
+      });
+    } catch { throw new Error("Expo push service is unavailable"); }
+    if (!response.ok) throw new Error(`Expo push delivery failed (${response.status})`);
+    const json = await response.json() as { data?: Array<{ id?: string; status?: string; message?: string }> };
+    const ticket = json.data?.[0];
+    if (!ticket || ticket.status !== "ok" || !ticket.id) throw new Error(ticket?.message ?? "Expo push delivery was rejected");
+    return { externalId: ticket.id };
+  }
+}
+
 export class DograhClient implements InstructionClient {
   constructor(private readonly config: Config) {}
   async inject(call: Call, text: string, instructionId: string = randomUUID()) {
@@ -281,6 +308,7 @@ export class CallService {
     await this.repo.saveCall(call);
     if (event.type === "call.started") {
       this.broadcast("call.started", call);
+      await this.queuePush(call, "push_call_started");
       const alertRoute = call.toNumber ? this.config.whatsappAlertRoutes.get(call.toNumber) : undefined;
       if (!browserTest && alertRoute) for (const operator of this.config.operatorNumbers) await this.repo.queueOutbound({ id: randomUUID(), callId: call.id, kind: "whatsapp_alert", body: { operator, call, agentLabel: alertRoute.agentLabel }, attempts: 0, availableAt: new Date().toISOString() });
     }
@@ -305,9 +333,20 @@ export class CallService {
           });
         }
       }
+      if (!browserTest && alertRoute?.callSummary) await this.queuePush(call, "push_call_summary");
     }
     this.broadcast("call.updated", call);
     return { duplicate: false, call };
+  }
+  private async queuePush(call: Call, kind: "push_call_started" | "push_call_summary") {
+    for (const device of await this.repo.listMobileDevices()) {
+      const enabled = kind === "push_call_started" ? device.preferences.callAlerts : device.preferences.summaryAlerts;
+      if (!enabled) continue;
+      await this.repo.queueOutbound({
+        id: randomUUID(), callId: call.id, kind,
+        body: { deviceId: device.id, pushToken: device.pushToken }, attempts: 0, availableAt: new Date().toISOString()
+      });
+    }
   }
   async activeCalls() { return (await this.repo.listCalls()).filter((call) => call.status === "active"); }
 }
@@ -316,7 +355,8 @@ export class OutboxWorker {
   constructor(
     private readonly repo: Repository,
     private readonly whatsapp: WhatsAppClient,
-    private readonly summaries: CallSummaryGenerator
+    private readonly summaries: CallSummaryGenerator,
+    private readonly push?: PushClient
   ) {}
   async processOne() {
     const message = await this.repo.claimOutbound(new Date().toISOString());
@@ -335,6 +375,33 @@ export class OutboxWorker {
           await this.repo.saveOutbound(message);
         }
         body = this.whatsapp.summaryBody((message.body as any).operator, call, summary);
+      } else if (message.kind === "push_call_started") {
+        const call = await this.repo.getCall(message.callId);
+        if (!call) throw new Error("Call no longer exists for mobile alert");
+        const token = String((message.body as any).pushToken ?? "");
+        const agent = String(call.metadata.workflowName ?? "Emma");
+        const result = await this.sendPush(token, `${agent} is answering a call`, `Incoming call from ${call.originalCaller ?? call.fromNumber ?? "Unknown caller"}`, { type: "call_started", callId: call.id });
+        message.externalId = result.externalId; message.deliveredAt = new Date().toISOString(); message.lastError = undefined;
+        await this.repo.saveOutbound(message);
+        return true;
+      } else if (message.kind === "push_call_summary") {
+        const call = await this.repo.getCall(message.callId);
+        if (!call) throw new Error("Call no longer exists for mobile summary");
+        let summary = (message.body as any).summary as CallSummary | undefined;
+        if (!summary) {
+          summary = await this.summaries.generate(call, await this.repo.listTranscript(call.id));
+          message.body = { ...message.body, summary };
+          await this.repo.saveOutbound(message);
+        }
+        const result = await this.sendPush(String((message.body as any).pushToken ?? ""), "Emma call summary", summary.update, { type: "call_summary", callId: call.id });
+        message.externalId = result.externalId; message.deliveredAt = new Date().toISOString(); message.lastError = undefined;
+        await this.repo.saveOutbound(message);
+        return true;
+      } else if (message.kind === "push_delivery_failed") {
+        const result = await this.sendPush(String((message.body as any).pushToken ?? ""), "WhatsApp delivery needs attention", String((message.body as any).text ?? "A WhatsApp update could not be delivered."), { type: "delivery_failed", callId: message.callId });
+        message.externalId = result.externalId; message.deliveredAt = new Date().toISOString(); message.lastError = undefined;
+        await this.repo.saveOutbound(message);
+        return true;
       } else {
         throw new Error("Unsupported WhatsApp outbox message kind");
       }
@@ -350,8 +417,19 @@ export class OutboxWorker {
       if (message.attempts >= 5) message.failedAt = new Date().toISOString();
       else message.availableAt = new Date(Date.now() + 1000 * 2 ** message.attempts).toISOString();
       await this.repo.saveOutbound(message);
+      if (message.failedAt && message.kind.startsWith("whatsapp_")) {
+        for (const device of await this.repo.listMobileDevices()) if (device.preferences.deliveryAlerts) await this.repo.queueOutbound({
+          id: randomUUID(), callId: message.callId, kind: "push_delivery_failed",
+          body: { pushToken: device.pushToken, text: `WhatsApp ${message.kind === "whatsapp_summary" ? "call summary" : "call alert"} could not be delivered. Open Cooper2Talk for details.` },
+          attempts: 0, availableAt: new Date().toISOString()
+        });
+      }
     }
     return true;
+  }
+  private async sendPush(token: string, title: string, body: string, data: Record<string, string>) {
+    if (!this.push) throw new Error("Mobile push delivery is not configured");
+    return this.push.send(token, title, body, data);
   }
 }
 

@@ -35,6 +35,9 @@ const schema = z.object({
   OPERATOR_NUMBERS: z.string().default(""),
   ADMIN_EMAIL: z.string().email().default("admin@example.ca"),
   ADMIN_PASSWORD: z.string().min(12).default("change-me-now-123"),
+  MOBILE_ACCESS_TOKEN_MINUTES: z.coerce.number().int().min(5).max(60).default(15),
+  MOBILE_REFRESH_TOKEN_DAYS: z.coerce.number().int().min(1).max(90).default(30),
+  EXPO_PUSH_ENABLED: z.union([z.enum(["true", "false"]), z.boolean()]).default("true").transform((value) => value === true || value === "true"),
   TRANSCRIPT_RETENTION_DAYS: z.coerce.number().int().min(1).max(3650).default(30)
 });
 

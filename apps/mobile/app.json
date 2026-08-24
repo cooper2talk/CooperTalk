@@ -1,0 +1,21 @@
+{
+  "expo": {
+    "name": "Cooper2Talk",
+    "slug": "cooper2talk-operator",
+    "scheme": "cooper2talk",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "ios": {
+      "bundleIdentifier": "com.cooper2talk.operator",
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.cooper2talk.operator"
+    },
+    "plugins": ["expo-notifications", "expo-secure-store", "expo-av"],
+    "extra": {
+      "apiBaseUrl": "https://34-130-230-27.sslip.io"
+    }
+  }
+}

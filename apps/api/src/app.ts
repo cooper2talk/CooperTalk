@@ -10,9 +10,9 @@ import Fastify, { type FastifyInstance, type FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Config } from "./config.js";
 import { validSignature } from "./crypto.js";
-import type { BusinessConfig, Call, DograhEvent, Repository, Role, User } from "./domain.js";
+import type { BusinessConfig, Call, DograhEvent, MobileDevice, MobileDevicePreferences, MobileSession, Repository, Role, User } from "./domain.js";
 import { normalizeCanadianNumber } from "./phone.js";
-import { CallService, CallSummaryService, DeepgramVoiceInstructionTranscriber, DograhClient, type InstructionClient, OutboxWorker, stableInstructionId, TelephonyClient, type VoiceInstructionTranscriber, WhatsAppClient } from "./services.js";
+import { CallService, CallSummaryService, DeepgramVoiceInstructionTranscriber, DograhClient, ExpoPushClient, type InstructionClient, OutboxWorker, stableInstructionId, TelephonyClient, type VoiceInstructionTranscriber, WhatsAppClient } from "./services.js";
 
 declare module "fastify" { interface FastifyRequest { rawBody?: string | Buffer } }
 
@@ -20,6 +20,9 @@ const loginSchema = z.object({ email: z.string().email(), password: z.string().m
 const injectionSchema = z.object({ text: z.string().trim().min(1).max(2000) });
 const transferSchema = z.object({ destination: z.string().min(7).max(32) });
 const operatorSchema = z.object({ email: z.string().email(), password: z.string().min(12).max(128), role: z.enum(["admin", "supervisor", "viewer"]) });
+const mobileLoginSchema = z.object({ email: z.string().email(), password: z.string().min(1).max(128) });
+const mobileRefreshSchema = z.object({ refreshToken: z.string().min(32).max(512) });
+const mobileDeviceSchema = z.object({ pushToken: z.string().regex(/^(ExponentPushToken|ExpoPushToken)\[[^\]]+\]$/), platform: z.enum(["ios", "android"]), preferences: z.object({ callAlerts: z.boolean().default(true), summaryAlerts: z.boolean().default(true), deliveryAlerts: z.boolean().default(true) }).default({ callAlerts: true, summaryAlerts: true, deliveryAlerts: true }) });
 const businessSchema = z.object({ name: z.string().trim().min(1).max(120), greeting: z.string().trim().min(1).max(1000), timezone: z.string().trim().min(1).max(100), businessHours: z.record(z.string().max(120)), systemPrompt: z.string().trim().min(1).max(12000), voice: z.string().trim().min(1).max(120), transferNumber: z.string().optional() });
 const dograhEventSchema = z.object({
   id: z.string().min(1), type: z.enum(["call.started", "transcript.final", "call.interrupted", "call.ended"]), occurredAt: z.string().datetime(),
@@ -27,10 +30,10 @@ const dograhEventSchema = z.object({
   payload: z.object({ speaker: z.enum(["caller", "assistant", "operator"]).optional(), text: z.string().optional(), interrupted: z.boolean().optional(), costUsd: z.number().nonnegative().optional() }).optional()
 });
 
-type Principal = { user: User; sessionId: string; csrfToken: string };
+type Principal = { user: User; sessionId?: string; mobileSessionId?: string; csrfToken?: string };
 type DependencyOverrides = { dograh?: InstructionClient; telephony?: TelephonyClient; whatsapp?: WhatsAppClient; transcriber?: VoiceInstructionTranscriber };
 const MAX_VOICE_INSTRUCTION_BYTES = 10 * 1024 * 1024;
-const supportedVoiceMimeTypes = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav"]);
+const supportedVoiceMimeTypes = new Set(["audio/webm", "audio/ogg", "audio/mp4", "audio/mpeg", "audio/wav", "audio/aac", "audio/x-m4a", "audio/m4a"]);
 
 export async function createApp(repo: Repository, config: Config, overrides: DependencyOverrides = {}) {
   const app = Fastify({ logger: config.NODE_ENV !== "test", trustProxy: config.NODE_ENV === "production" });
@@ -46,28 +49,33 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
     for (const socket of sockets) if (socket.readyState === socket.OPEN) socket.send(data);
   };
   const callService = new CallService(repo, config, broadcast);
-  const outbox = new OutboxWorker(repo, clients.whatsapp, new CallSummaryService(config));
+  const outbox = new OutboxWorker(repo, clients.whatsapp, new CallSummaryService(config), new ExpoPushClient(config));
 
   await app.register(cookie, { secret: config.SESSION_SECRET, hook: "onRequest" });
   await app.register(rateLimit, { global: true, max: 120, timeWindow: "1 minute" });
   await app.register(websocket);
   await app.register(rawBody, { field: "rawBody", global: false, encoding: false, runFirst: true });
-  app.addContentTypeParser(/^audio\/(webm|ogg|mp4|mpeg|wav)(?:;.*)?$/i, { parseAs: "buffer", bodyLimit: MAX_VOICE_INSTRUCTION_BYTES }, (_request, body, done) => done(null, body));
+  app.addContentTypeParser(/^audio\/(webm|ogg|mp4|mpeg|wav|aac|x-m4a|m4a)(?:;.*)?$/i, { parseAs: "buffer", bodyLimit: MAX_VOICE_INSTRUCTION_BYTES }, (_request, body, done) => done(null, body));
   await app.register(staticFiles, { root: path.resolve(process.cwd(), "apps/console/dist"), prefix: "/", wildcard: false, decorateReply: false });
 
   async function principal(request: FastifyRequest): Promise<Principal | undefined> {
     const sessionId = request.cookies.cooper_session;
-    if (!sessionId) return undefined;
-    const session = await repo.getSession(sessionId);
-    if (!session) return undefined;
-    const user = await repo.getUserById(session.userId);
-    return user ? { user, sessionId, csrfToken: session.csrfToken } : undefined;
+    if (sessionId) {
+      const session = await repo.getSession(sessionId);
+      const user = session && await repo.getUserById(session.userId);
+      if (session && user) return { user, sessionId, csrfToken: session.csrfToken };
+    }
+    const bearer = request.headers.authorization?.match(/^Bearer\s+(.+)$/i)?.[1];
+    if (!bearer) return undefined;
+    const session = await repo.getMobileSessionByAccessHash(hashToken(bearer));
+    const user = session && await repo.getUserById(session.userId);
+    return session && user ? { user, mobileSessionId: session.id } : undefined;
   }
   async function requireUser(request: FastifyRequest, roles?: Role[]) {
     const p = await principal(request);
     if (!p) fail(401, "Sign in required");
     if (roles && !roles.includes(p.user.role)) fail(403, "Insufficient role");
-    if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && request.url.startsWith("/api/") && request.headers["x-csrf-token"] !== p.csrfToken) fail(403, "Invalid CSRF token");
+    if (p.sessionId && ["POST", "PUT", "PATCH", "DELETE"].includes(request.method) && request.url.startsWith("/api/") && request.headers["x-csrf-token"] !== p.csrfToken) fail(403, "Invalid CSRF token");
     return p;
   }
   async function getCall(callId: string) { const call = await repo.getCall(callId); if (!call) fail(404, "Call not found"); return call; }
@@ -98,7 +106,7 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
     reply.setCookie("cooper_session", session.id, { httpOnly: true, secure: config.NODE_ENV === "production", sameSite: "lax", path: "/", maxAge: 7 * 86400 });
     return { user: publicUser(user), csrfToken: session.csrfToken };
   });
-  app.post("/api/auth/logout", async (request, reply) => { const p = await principal(request); if (p) await repo.deleteSession(p.sessionId); reply.clearCookie("cooper_session", { path: "/" }); return { ok: true }; });
+  app.post("/api/auth/logout", async (request, reply) => { const p = await principal(request); if (p?.sessionId) await repo.deleteSession(p.sessionId); reply.clearCookie("cooper_session", { path: "/" }); return { ok: true }; });
   app.get("/api/me", async (request) => { const p = await principal(request); return p ? { user: publicUser(p.user), csrfToken: p.csrfToken } : { user: null }; });
   app.get("/api/operators", async (request) => { await requireUser(request, ["admin"]); return { operators: (await repo.listUsers()).map(publicUser) }; });
   app.post("/api/operators", async (request) => { const p = await requireUser(request, ["admin"]); const body = operatorSchema.parse(request.body); if (await repo.getUserByEmail(body.email)) fail(409, "Email already exists"); const user: User = { id: randomUUID(), email: body.email.toLowerCase(), passwordHash: await bcrypt.hash(body.password, 12), role: body.role, createdAt: new Date().toISOString() }; await repo.createUser(user); await repo.writeAudit("operator.created", p.user.id, undefined, { userId: user.id, role: user.role }); return { user: publicUser(user) }; });
@@ -116,6 +124,35 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
     }));
     return { reports };
   });
+  app.post("/api/mobile/auth/login", async (request) => {
+    const body = mobileLoginSchema.parse(request.body);
+    const user = await repo.getUserByEmail(body.email);
+    if (!user || !(await bcrypt.compare(body.password, user.passwordHash))) fail(401, "Invalid email or password");
+    const tokens = mobileTokens(); const now = new Date();
+    const session: MobileSession = { id: randomUUID(), userId: user.id, accessTokenHash: hashToken(tokens.accessToken), refreshTokenHash: hashToken(tokens.refreshToken), accessExpiresAt: new Date(now.getTime() + config.MOBILE_ACCESS_TOKEN_MINUTES * 60_000).toISOString(), refreshExpiresAt: new Date(now.getTime() + config.MOBILE_REFRESH_TOKEN_DAYS * 86_400_000).toISOString(), createdAt: now.toISOString(), lastUsedAt: now.toISOString() };
+    await repo.createMobileSession(session);
+    await repo.writeAudit("mobile.login", user.id, undefined, {});
+    return { user: publicUser(user), ...tokens, accessExpiresAt: session.accessExpiresAt };
+  });
+  app.post("/api/mobile/auth/refresh", async (request) => {
+    const { refreshToken } = mobileRefreshSchema.parse(request.body);
+    const session = await repo.getMobileSessionByRefreshHash(hashToken(refreshToken));
+    if (!session) fail(401, "Mobile session expired. Please sign in again.");
+    const user = await repo.getUserById(session.userId); if (!user) fail(401, "Mobile account is unavailable");
+    const tokens = mobileTokens(); const now = new Date();
+    session.accessTokenHash = hashToken(tokens.accessToken); session.refreshTokenHash = hashToken(tokens.refreshToken); session.accessExpiresAt = new Date(now.getTime() + config.MOBILE_ACCESS_TOKEN_MINUTES * 60_000).toISOString(); session.refreshExpiresAt = new Date(now.getTime() + config.MOBILE_REFRESH_TOKEN_DAYS * 86_400_000).toISOString(); session.lastUsedAt = now.toISOString();
+    await repo.saveMobileSession(session);
+    return { user: publicUser(user), ...tokens, accessExpiresAt: session.accessExpiresAt };
+  });
+  app.post("/api/mobile/auth/logout", async (request) => { const p = await requireUser(request); if (p.mobileSessionId) await repo.deleteMobileSession(p.mobileSessionId); await repo.writeAudit("mobile.logout", p.user.id, undefined, {}); return { ok: true }; });
+  app.get("/api/mobile/me", async (request) => { const p = await requireUser(request); return { user: publicUser(p.user) }; });
+  app.post("/api/mobile/devices", async (request) => {
+    const p = await requireUser(request); const body = mobileDeviceSchema.parse(request.body); const now = new Date().toISOString();
+    const device: MobileDevice = { id: randomUUID(), userId: p.user.id, pushToken: body.pushToken, platform: body.platform, preferences: body.preferences as MobileDevicePreferences, createdAt: now, lastSeenAt: now };
+    const saved = await repo.upsertMobileDevice(device); await repo.writeAudit("mobile.device_registered", p.user.id, undefined, { deviceId: saved.id, platform: saved.platform }); return { device: publicDevice(saved) };
+  });
+  app.get("/api/mobile/devices", async (request) => { const p = await requireUser(request); return { devices: (await repo.listMobileDevices(p.user.id)).map(publicDevice) }; });
+  app.delete("/api/mobile/devices/:deviceId", async (request) => { const p = await requireUser(request); await repo.deleteMobileDevice((request.params as any).deviceId, p.user.id); await repo.writeAudit("mobile.device_removed", p.user.id, undefined, {}); return { ok: true }; });
   app.post("/api/calls/:callId/injections", async (request) => {
     const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); if (call.status !== "active") fail(409, "Call is not active");
     const injectionBody = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
@@ -166,6 +203,9 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
 }
 
 function publicUser(user: User) { return { id: user.id, email: user.email, role: user.role }; }
+function publicDevice(device: MobileDevice) { return { id: device.id, platform: device.platform, preferences: device.preferences, createdAt: device.createdAt, lastSeenAt: device.lastSeenAt }; }
+function hashToken(token: string) { return createHash("sha256").update(token).digest("hex"); }
+function mobileTokens() { return { accessToken: randomBytes(32).toString("base64url"), refreshToken: randomBytes(48).toString("base64url") }; }
 function fail(statusCode: number, message: string): never { throw Object.assign(new Error(message), { statusCode }); }
 function replyStatus(status: number, payload: unknown) { return { status, ...payload as any }; }
 async function handleWhatsAppMessage(message: any, callService: CallService, repo: Repository, config: Config, dograh: InstructionClient, broadcast: (event: string, payload: unknown) => void) {

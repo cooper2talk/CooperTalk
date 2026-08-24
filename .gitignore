@@ -4,6 +4,11 @@
 !.env.example
 *.pem
 *.key
+*.p8
+*.keystore
+google-services.json
+GoogleService-Info.plist
+credentials.json
 cooper_voice_key*
 cooper2talk
 cooper2talk.pub
@@ -13,6 +18,8 @@ node_modules/
 dist/
 coverage/
 .vite/
+.expo/
+.expo-shared/
 .turbo/
 *.tsbuildinfo
 

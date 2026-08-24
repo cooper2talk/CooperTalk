@@ -4,7 +4,7 @@ import { hmacSha256 } from "../src/crypto.js";
 import { createApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { MemoryRepository } from "../src/repository.js";
-import { CallService, CallSummaryService, OutboxWorker, WhatsAppClient, type CallSummaryGenerator, type VoiceInstructionTranscriber } from "../src/services.js";
+import { CallService, CallSummaryService, OutboxWorker, WhatsAppClient, type CallSummaryGenerator, type PushClient, type VoiceInstructionTranscriber } from "../src/services.js";
 
 const config = loadConfig({ NODE_ENV: "test", PUBLIC_BASE_URL: "http://localhost:3000", SESSION_SECRET: "a-test-session-secret-long-enough", DOGRAH_EVENT_SECRET: "a-test-dograh-event-secret", WHATSAPP_VERIFY_TOKEN: "a-test-whatsapp-verify-token", ADMIN_EMAIL: "admin@example.ca", ADMIN_PASSWORD: "secure-demo-password", OPERATOR_NUMBERS: "+16474727980", WHATSAPP_SUMMARY_DELAY_SECONDS: "0", WHATSAPP_ALERT_ROUTES: JSON.stringify({ "+17053004321": { agentLabel: "Emma — Canadian Receptionist", callSummary: true }, "+14095060390": { agentLabel: "Nichole — ExcelLinx Project Manager Assistant", callSummary: false } }) });
 const fallbackSummaryGenerator: CallSummaryGenerator = { generate: async () => ({ language: "english", update: "Fallback summary.", urgency: "Not stated", source: "fallback" }) };
@@ -115,6 +115,52 @@ test("voice instruction transcribes in memory and uses the normal injection path
   const unsupported = await app.inject({ method: "POST", url: `/api/calls/${call.id}/voice-instructions`, payload: Buffer.from([1]), headers: { cookie: cookie(login), "content-type": "application/octet-stream", "x-csrf-token": csrf } });
   assert.equal(unsupported.statusCode, 415);
   await app.close();
+});
+
+test("native login rotates a short-lived bearer session and never needs a CSRF cookie", async () => {
+  const app = await setup();
+  const login = await app.inject({ method: "POST", url: "/api/mobile/auth/login", payload: { email: "admin@example.ca", password: "secure-demo-password" } });
+  assert.equal(login.statusCode, 200);
+  const accessToken = login.json().accessToken as string;
+  const refreshToken = login.json().refreshToken as string;
+  assert.ok(accessToken.length >= 40); assert.ok(refreshToken.length > accessToken.length);
+  const me = await app.inject({ method: "GET", url: "/api/mobile/me", headers: { authorization: `Bearer ${accessToken}` } });
+  assert.equal(me.statusCode, 200); assert.equal(me.json().user.role, "admin");
+  const rotated = await app.inject({ method: "POST", url: "/api/mobile/auth/refresh", payload: { refreshToken } });
+  assert.equal(rotated.statusCode, 200); assert.notEqual(rotated.json().accessToken, accessToken);
+  const oldAccess = await app.inject({ method: "GET", url: "/api/mobile/me", headers: { authorization: `Bearer ${accessToken}` } });
+  assert.equal(oldAccess.statusCode, 401);
+  await app.close();
+});
+
+test("mobile devices receive durable call and Emma-summary push jobs without storing audio", async () => {
+  const repo = new MemoryRepository();
+  const app = await createApp(repo, config);
+  const login = await app.inject({ method: "POST", url: "/api/mobile/auth/login", payload: { email: "admin@example.ca", password: "secure-demo-password" } });
+  const accessToken = login.json().accessToken as string;
+  const device = await app.inject({ method: "POST", url: "/api/mobile/devices", headers: { authorization: `Bearer ${accessToken}` }, payload: { pushToken: "ExponentPushToken[native-device]", platform: "ios", preferences: { callAlerts: true, summaryAlerts: true, deliveryAlerts: true } } });
+  assert.equal(device.statusCode, 200); assert.equal(device.json().device.pushToken, undefined);
+  const start = { ...event(), id: "evt-native-start", call: { ...event().call, dograhRunId: "run-native-push", to: "7053004321" } };
+  const startPayload = JSON.stringify(start); const signature = `sha256=${hmacSha256(config.DOGRAH_EVENT_SECRET, startPayload)}`;
+  await app.inject({ method: "POST", url: "/internal/dograh/events", payload: startPayload, headers: { "content-type": "application/json", "x-cooper-signature": signature } });
+  assert.ok([...repo.outbound.values()].some((message) => message.kind === "push_call_started"));
+  const end = { id: "evt-native-end", type: "call.ended", occurredAt: "2026-08-15T12:01:00.000Z", call: start.call };
+  const endPayload = JSON.stringify(end); const endSignature = `sha256=${hmacSha256(config.DOGRAH_EVENT_SECRET, endPayload)}`;
+  await app.inject({ method: "POST", url: "/internal/dograh/events", payload: endPayload, headers: { "content-type": "application/json", "x-cooper-signature": endSignature } });
+  assert.ok([...repo.outbound.values()].some((message) => message.kind === "push_call_summary"));
+  await app.close();
+});
+
+test("Expo push jobs record a provider receipt only after the provider accepts delivery", async () => {
+  const repo = new MemoryRepository();
+  const call = { id: "push-receipt-call", dograhRunId: "push-receipt-run", provider: "telnyx" as const, status: "active" as const, startedAt: "2026-08-15T12:00:00.000Z", metadata: {} };
+  await repo.saveCall(call);
+  await repo.queueOutbound({ id: "push-receipt-message", callId: call.id, kind: "push_call_started", body: { pushToken: "ExponentPushToken[native-device]" }, attempts: 0, availableAt: "2026-08-15T12:00:00.000Z" });
+  const push: PushClient = { send: async (token, title, body, data) => { assert.equal(token, "ExponentPushToken[native-device]"); assert.match(title, /Emma/); assert.match(body, /Unknown caller/); assert.deepEqual(data, { type: "call_started", callId: call.id }); return { externalId: "expo-ticket-1" }; } };
+  const worker = new OutboxWorker(repo, new WhatsAppClient(config), fallbackSummaryGenerator, push);
+  await worker.processOne();
+  const queued = [...repo.outbound.values()][0];
+  assert.equal(queued.externalId, "expo-ticket-1"); assert.ok(queued.deliveredAt);
 });
 
 test("Emma call completion queues one Hinglish summary and sends it through the approved template", async () => {

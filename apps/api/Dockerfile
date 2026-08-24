@@ -4,7 +4,8 @@ COPY package.json ./
 COPY package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/console/package.json apps/console/package.json
-RUN npm ci
+COPY apps/mobile/package.json apps/mobile/package.json
+RUN npm ci --workspace=@cooper2talk/api --workspace=@cooper2talk/console
 COPY apps/api apps/api
 COPY apps/console apps/console
 RUN npm run build --workspaces --if-present
@@ -16,6 +17,7 @@ COPY package.json ./
 COPY package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/console/package.json apps/console/package.json
+COPY apps/mobile/package.json apps/mobile/package.json
 RUN npm ci --omit=dev --workspace=@cooper2talk/api
 COPY --from=build /app/apps/api/dist apps/api/dist
 COPY --from=build /app/apps/console/dist apps/console/dist
