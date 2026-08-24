@@ -226,7 +226,13 @@ export class WhatsAppClient {
   async send(body: Record<string, unknown>) {
     if (!this.config.WHATSAPP_ACCESS_TOKEN || !this.config.WHATSAPP_PHONE_NUMBER_ID) throw new Error("WhatsApp Cloud API sender credentials are not configured");
     const response = await fetch(`https://graph.facebook.com/v22.0/${this.config.WHATSAPP_PHONE_NUMBER_ID}/messages`, { method: "POST", headers: { authorization: `Bearer ${this.config.WHATSAPP_ACCESS_TOKEN}`, "content-type": "application/json" }, body: JSON.stringify(body) });
-    if (!response.ok) throw new Error(`WhatsApp send failed (${response.status})`);
+    if (!response.ok) {
+      const detail = await response.json().catch(() => undefined) as { error?: { message?: unknown; code?: unknown; error_subcode?: unknown } } | undefined;
+      const message = typeof detail?.error?.message === "string" ? detail.error.message.replace(/\s+/g, " ").trim().slice(0, 350) : "Meta returned no error detail";
+      const code = typeof detail?.error?.code === "number" ? `, code ${detail.error.code}` : "";
+      const subcode = typeof detail?.error?.error_subcode === "number" ? `, subcode ${detail.error.error_subcode}` : "";
+      throw new Error(`WhatsApp send failed (${response.status}${code}${subcode}): ${message}`);
+    }
     const json = await response.json() as { messages?: Array<{ id: string }> };
     return { externalId: json.messages?.[0]?.id ?? `unknown-${randomUUID()}` };
   }
