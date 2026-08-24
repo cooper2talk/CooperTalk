@@ -17,6 +17,19 @@ Deploy the API and Dograh on the resized GCP Toronto VM. Use a domain with TLS a
 
 See [`docs/deployment.md`](docs/deployment.md) and [`docs/dograh-extension.md`](docs/dograh-extension.md).
 
+## Native operator app
+
+`apps/mobile` is the iPhone and Android operator companion. It reuses Cooper's
+authenticated call APIs and live WebSocket, supports typed and short spoken
+operator instructions, and registers Expo device tokens for call and summary
+push notifications. It does not carry a telephony stream or any provider secret.
+
+Use `npm run start --workspace=@cooper2talk/mobile` for Expo development.
+Before a physical-device pilot, create the Expo/EAS project, Apple Developer
+APNs credentials, and Firebase Cloud Messaging credentials; follow
+[`apps/mobile/README.md`](apps/mobile/README.md). The existing web console
+remains the desktop fallback.
+
 ## Emma WhatsApp call summaries
 
 After a completed call to Emma's routed number (`+1 705 300 4321`), Cooper queues one call-close WhatsApp summary for the configured operator. The summary follows the caller's language: Hinglish/Hindi calls receive a Hinglish update and English calls receive an English update. If Groq is rate-limited, Cooper safely sends the latest caller statements instead of delaying the completed call.

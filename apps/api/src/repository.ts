@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
-import type { BusinessConfig, Call, OutboundMessage, Repository, Session, TranscriptMessage, User } from "./domain.js";
+import type { BusinessConfig, Call, MobileDevice, MobileSession, OutboundMessage, Repository, Session, TranscriptMessage, User } from "./domain.js";
 
 export class MemoryRepository implements Repository {
   users = new Map<string, User>();
   sessions = new Map<string, Session>();
+  mobileSessions = new Map<string, MobileSession>();
+  mobileDevices = new Map<string, MobileDevice>();
   calls = new Map<string, Call>();
   messages = new Map<string, TranscriptMessage[]>();
   processed = new Set<string>();
@@ -20,6 +22,20 @@ export class MemoryRepository implements Repository {
   async createSession(session: Session) { this.sessions.set(session.id, session); }
   async getSession(id: string) { const s = this.sessions.get(id); return s && Date.parse(s.expiresAt) > Date.now() ? s : undefined; }
   async deleteSession(id: string) { this.sessions.delete(id); }
+  async createMobileSession(session: MobileSession) { this.mobileSessions.set(session.id, structuredClone(session)); }
+  async getMobileSessionByAccessHash(accessTokenHash: string) { return [...this.mobileSessions.values()].find((session) => session.accessTokenHash === accessTokenHash && Date.parse(session.accessExpiresAt) > Date.now()); }
+  async getMobileSessionByRefreshHash(refreshTokenHash: string) { return [...this.mobileSessions.values()].find((session) => session.refreshTokenHash === refreshTokenHash && Date.parse(session.refreshExpiresAt) > Date.now()); }
+  async saveMobileSession(session: MobileSession) { this.mobileSessions.set(session.id, structuredClone(session)); }
+  async deleteMobileSession(id: string) { this.mobileSessions.delete(id); }
+  async upsertMobileDevice(device: MobileDevice) {
+    const existing = [...this.mobileDevices.values()].find((candidate) => candidate.userId === device.userId && candidate.pushToken === device.pushToken);
+    const value = existing ? { ...device, id: existing.id, createdAt: existing.createdAt } : device;
+    this.mobileDevices.set(value.id, structuredClone(value));
+    return structuredClone(value);
+  }
+  async getMobileDevice(id: string) { const device = this.mobileDevices.get(id); return device && structuredClone(device); }
+  async listMobileDevices(userId?: string) { return [...this.mobileDevices.values()].filter((device) => !userId || device.userId === userId).map((device) => structuredClone(device)); }
+  async deleteMobileDevice(id: string, userId: string) { const device = this.mobileDevices.get(id); if (device?.userId === userId) this.mobileDevices.delete(id); }
   async saveCall(call: Call) { this.calls.set(call.id, structuredClone(call)); }
   async getCall(id: string) { const call = this.calls.get(id); return call && structuredClone(call); }
   async getCallByRunId(runId: string) { return [...this.calls.values()].find((c) => c.dograhRunId === runId); }
@@ -47,6 +63,8 @@ export class PostgresRepository implements Repository {
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS users (id uuid PRIMARY KEY, email text UNIQUE NOT NULL, password_hash text NOT NULL, role text NOT NULL, created_at timestamptz NOT NULL);
       CREATE TABLE IF NOT EXISTS sessions (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, csrf_token text NOT NULL, expires_at timestamptz NOT NULL);
+      CREATE TABLE IF NOT EXISTS mobile_sessions (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, access_token_hash text UNIQUE NOT NULL, refresh_token_hash text UNIQUE NOT NULL, access_expires_at timestamptz NOT NULL, refresh_expires_at timestamptz NOT NULL, created_at timestamptz NOT NULL, last_used_at timestamptz NOT NULL);
+      CREATE TABLE IF NOT EXISTS mobile_devices (id uuid PRIMARY KEY, user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE, push_token text NOT NULL, platform text NOT NULL, preferences jsonb NOT NULL DEFAULT '{"callAlerts":true,"summaryAlerts":true,"deliveryAlerts":true}', created_at timestamptz NOT NULL, last_seen_at timestamptz NOT NULL, UNIQUE(user_id, push_token));
       CREATE TABLE IF NOT EXISTS calls (id uuid PRIMARY KEY, dograh_run_id text UNIQUE NOT NULL, provider text NOT NULL DEFAULT 'twilio', provider_call_id text, call_leg_id text, call_session_id text, twilio_call_sid text, stream_sid text, from_number text, to_number text, forwarded_from text, original_caller text, status text NOT NULL, started_at timestamptz NOT NULL, ended_at timestamptz, ai_state text, cost_usd numeric, metadata jsonb NOT NULL DEFAULT '{}');
       CREATE TABLE IF NOT EXISTS transcript_messages (id uuid PRIMARY KEY, call_id uuid NOT NULL REFERENCES calls(id) ON DELETE CASCADE, speaker text NOT NULL, text text NOT NULL, source text NOT NULL, occurred_at timestamptz NOT NULL, interrupted boolean NOT NULL DEFAULT false);
       CREATE TABLE IF NOT EXISTS processed_events (id text PRIMARY KEY, processed_at timestamptz NOT NULL DEFAULT now());
@@ -56,6 +74,9 @@ export class PostgresRepository implements Repository {
       CREATE TABLE IF NOT EXISTS business_config (id boolean PRIMARY KEY DEFAULT true CHECK(id), value jsonb NOT NULL, updated_at timestamptz NOT NULL DEFAULT now());
       CREATE INDEX IF NOT EXISTS idx_transcript_call ON transcript_messages(call_id, occurred_at);
       CREATE INDEX IF NOT EXISTS idx_outbound_ready ON outbound_messages(available_at) WHERE delivered_at IS NULL AND failed_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_mobile_session_access ON mobile_sessions(access_token_hash);
+      CREATE INDEX IF NOT EXISTS idx_mobile_session_refresh ON mobile_sessions(refresh_token_hash);
+      CREATE INDEX IF NOT EXISTS idx_mobile_devices_user ON mobile_devices(user_id);
       CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_summary_per_call ON outbound_messages(call_id) WHERE kind = 'whatsapp_summary';
       ALTER TABLE calls ADD COLUMN IF NOT EXISTS provider text;
       ALTER TABLE calls ADD COLUMN IF NOT EXISTS provider_call_id text;
@@ -75,6 +96,17 @@ export class PostgresRepository implements Repository {
   async createSession(s: Session) { await this.pool.query("INSERT INTO sessions VALUES ($1,$2,$3,$4)", [s.id, s.userId, s.csrfToken, s.expiresAt]); }
   async getSession(id: string) { const q = await this.pool.query("SELECT * FROM sessions WHERE id=$1 AND expires_at > now()", [id]); return q.rows[0] && { id: q.rows[0].id, userId: q.rows[0].user_id, csrfToken: q.rows[0].csrf_token, expiresAt: q.rows[0].expires_at.toISOString() }; }
   async deleteSession(id: string) { await this.pool.query("DELETE FROM sessions WHERE id=$1", [id]); }
+  private toMobileSession(row: any): MobileSession { return { id: row.id, userId: row.user_id, accessTokenHash: row.access_token_hash, refreshTokenHash: row.refresh_token_hash, accessExpiresAt: row.access_expires_at.toISOString(), refreshExpiresAt: row.refresh_expires_at.toISOString(), createdAt: row.created_at.toISOString(), lastUsedAt: row.last_used_at.toISOString() }; }
+  private toMobileDevice(row: any): MobileDevice { return { id: row.id, userId: row.user_id, pushToken: row.push_token, platform: row.platform === "ios" ? "ios" : "android", preferences: row.preferences ?? { callAlerts: true, summaryAlerts: true, deliveryAlerts: true }, createdAt: row.created_at.toISOString(), lastSeenAt: row.last_seen_at.toISOString() }; }
+  async createMobileSession(session: MobileSession) { await this.pool.query("INSERT INTO mobile_sessions VALUES($1,$2,$3,$4,$5,$6,$7,$8)", [session.id, session.userId, session.accessTokenHash, session.refreshTokenHash, session.accessExpiresAt, session.refreshExpiresAt, session.createdAt, session.lastUsedAt]); }
+  async getMobileSessionByAccessHash(hash: string) { const q = await this.pool.query("SELECT * FROM mobile_sessions WHERE access_token_hash=$1 AND access_expires_at > now()", [hash]); return q.rows[0] && this.toMobileSession(q.rows[0]); }
+  async getMobileSessionByRefreshHash(hash: string) { const q = await this.pool.query("SELECT * FROM mobile_sessions WHERE refresh_token_hash=$1 AND refresh_expires_at > now()", [hash]); return q.rows[0] && this.toMobileSession(q.rows[0]); }
+  async saveMobileSession(session: MobileSession) { await this.pool.query("UPDATE mobile_sessions SET access_token_hash=$2,refresh_token_hash=$3,access_expires_at=$4,refresh_expires_at=$5,last_used_at=$6 WHERE id=$1", [session.id, session.accessTokenHash, session.refreshTokenHash, session.accessExpiresAt, session.refreshExpiresAt, session.lastUsedAt]); }
+  async deleteMobileSession(id: string) { await this.pool.query("DELETE FROM mobile_sessions WHERE id=$1", [id]); }
+  async upsertMobileDevice(device: MobileDevice) { const q = await this.pool.query("INSERT INTO mobile_devices(id,user_id,push_token,platform,preferences,created_at,last_seen_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(user_id,push_token) DO UPDATE SET platform=excluded.platform,preferences=excluded.preferences,last_seen_at=excluded.last_seen_at RETURNING *", [device.id, device.userId, device.pushToken, device.platform, JSON.stringify(device.preferences), device.createdAt, device.lastSeenAt]); return this.toMobileDevice(q.rows[0]); }
+  async getMobileDevice(id: string) { const q = await this.pool.query("SELECT * FROM mobile_devices WHERE id=$1", [id]); return q.rows[0] && this.toMobileDevice(q.rows[0]); }
+  async listMobileDevices(userId?: string) { const q = await this.pool.query(userId ? "SELECT * FROM mobile_devices WHERE user_id=$1 ORDER BY last_seen_at DESC" : "SELECT * FROM mobile_devices ORDER BY last_seen_at DESC", userId ? [userId] : []); return q.rows.map((row) => this.toMobileDevice(row)); }
+  async deleteMobileDevice(id: string, userId: string) { await this.pool.query("DELETE FROM mobile_devices WHERE id=$1 AND user_id=$2", [id, userId]); }
   async saveCall(c: Call) { await this.pool.query(`INSERT INTO calls (id,dograh_run_id,provider,provider_call_id,call_leg_id,call_session_id,twilio_call_sid,stream_sid,from_number,to_number,forwarded_from,original_caller,status,started_at,ended_at,ai_state,cost_usd,metadata) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) ON CONFLICT (dograh_run_id) DO UPDATE SET provider=excluded.provider,provider_call_id=excluded.provider_call_id,call_leg_id=excluded.call_leg_id,call_session_id=excluded.call_session_id,twilio_call_sid=excluded.twilio_call_sid,stream_sid=excluded.stream_sid,from_number=excluded.from_number,to_number=excluded.to_number,forwarded_from=excluded.forwarded_from,original_caller=excluded.original_caller,status=excluded.status,ended_at=excluded.ended_at,ai_state=excluded.ai_state,cost_usd=excluded.cost_usd,metadata=excluded.metadata`, [c.id,c.dograhRunId,c.provider,c.providerCallId,c.callLegId,c.callSessionId,c.twilioCallSid,c.streamSid,c.fromNumber,c.toNumber,c.forwardedFrom,c.originalCaller,c.status,c.startedAt,c.endedAt,c.aiState,c.costUsd,JSON.stringify(c.metadata)]); }
   async getCall(id: string) { const q=await this.pool.query("SELECT * FROM calls WHERE id=$1",[id]); return q.rows[0]&&this.toCall(q.rows[0]); }
   async getCallByRunId(id: string) { const q=await this.pool.query("SELECT * FROM calls WHERE dograh_run_id=$1",[id]); return q.rows[0]&&this.toCall(q.rows[0]); }
