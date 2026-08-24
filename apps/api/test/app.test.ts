@@ -140,3 +140,21 @@ test("summary fallback preserves Hinglish or English caller text when Groq is un
   assert.deepEqual({ language: english.language, source: english.source }, { language: "english", source: "fallback" });
   assert.match(english.update, /closing documents/);
 });
+
+test("summary generator asks Groq for a factual operator handoff from the call conversation", async () => {
+  const call = { id: "summary-ai-call", dograhRunId: "summary-ai-run", provider: "telnyx" as const, status: "completed" as const, startedAt: "2026-08-15T12:00:00.000Z", endedAt: "2026-08-15T12:03:00.000Z", metadata: {} };
+  let requestBody = "";
+  const generator = new CallSummaryService(loadConfig({ ...config, GROQ_API_KEY: "test-key" }), async (_url, init) => {
+    requestBody = String(init?.body);
+    return new Response(JSON.stringify({ choices: [{ message: { content: '{"language":"english","update":"Caller asked Surinder to review the closing documents for a Toronto property and requested a follow-up.","urgency":"Not stated"}' } }] }), { status: 200 });
+  });
+  const summary = await generator.generate(call, [
+    { id: "t1", callId: call.id, speaker: "caller", source: "dograh", occurredAt: call.startedAt, text: "I need Surinder to review the closing documents for my Toronto property." },
+    { id: "t2", callId: call.id, speaker: "assistant", source: "dograh", occurredAt: call.startedAt, text: "I can take the details for him." },
+    { id: "t3", callId: call.id, speaker: "caller", source: "dograh", occurredAt: call.startedAt, text: "Please ask him to follow up." }
+  ]);
+  assert.equal(summary.source, "ai");
+  assert.match(summary.update, /Toronto property/);
+  assert.match(requestBody, /actual reason for calling/);
+  assert.match(requestBody, /Caller: I need Surinder/);
+});

@@ -128,7 +128,7 @@ export class CallSummaryService implements CallSummaryGenerator {
 
     const dialogue = transcript
       .filter((message) => message.speaker === "caller" || message.speaker === "assistant")
-      .slice(-24)
+      .slice(-40)
       .map((message) => `${message.speaker === "caller" ? "Caller" : "Emma"}: ${message.text}`)
       .join("\n")
       .slice(-12000);
@@ -139,12 +139,12 @@ export class CallSummaryService implements CallSummaryGenerator {
         body: JSON.stringify({
           model: "openai/gpt-oss-120b",
           temperature: 0.1,
-          max_tokens: 160,
+          max_tokens: 240,
           response_format: { type: "json_object" },
           messages: [
             {
               role: "system",
-              content: "Create a factual call-close WhatsApp summary from the transcript. Return JSON only: {\"language\":\"english|hinglish\",\"update\":\"...\",\"urgency\":\"...\"}. Determine language only from caller turns: use hinglish when the caller uses Hindi, Hinglish, or a mix; otherwise english. Hinglish must use Latin script, not Devanagari. Keep update under 360 characters. Preserve phone numbers, codes, and reference numbers as digits. Include only facts actually stated. Never promise a callback, action, availability, or urgency. Use urgency \"Not stated\" in English or \"Mention nahi hua\" in Hinglish unless urgency was explicitly stated."
+              content: "You are preparing a useful, factual handoff for Surinder after Emma's call. Analyze the full conversation, but treat caller turns as the only source of facts. Return JSON only: {\"language\":\"english|hinglish\",\"update\":\"...\",\"urgency\":\"...\"}. The update must be a concise 1–3 sentence operator summary: state the caller's actual reason for calling, then include only material details they gave (person, property, city, documents, dates, phone numbers, reference numbers) and the specific action or question they requested. Omit greetings, pleasantries, Emma's generic wording, repeated questions, and guesses. If the caller gave no substantive request, say that plainly. Determine language only from caller turns: use hinglish when the caller uses Hindi, Hinglish, or a mix; otherwise english. Hinglish must use Latin script, not Devanagari. Keep update under 360 characters. Preserve phone numbers, codes, and reference numbers as normal digits. Include only facts actually stated. Never invent or promise a callback, action, availability, status, or urgency. Set urgency to exactly \"Not stated\" in English or \"Mention nahi hua\" in Hinglish unless the caller explicitly stated urgency."
             },
             { role: "user", content: dialogue }
           ]
