@@ -1,0 +1,10 @@
+{
+  "name": "Cooper2Talk Operator",
+  "short_name": "Cooper2Talk",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#07101d",
+  "theme_color": "#07101d",
+  "description": "Live AI receptionist call oversight and reports.",
+  "icons": [{ "src": "/app-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}

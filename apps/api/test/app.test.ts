@@ -27,6 +27,18 @@ test("rejects unsigned Dograh events and accepts signed events once", async () =
   await app.close();
 });
 
+test("call reports require a session and expose call report records", async () => {
+  const app = await setup(); const payload = JSON.stringify(event()); const signature = `sha256=${hmacSha256(config.DOGRAH_EVENT_SECRET, payload)}`;
+  assert.equal((await app.inject({ method: "GET", url: "/api/reports/calls" })).statusCode, 401);
+  await app.inject({ method: "POST", url: "/internal/dograh/events", payload, headers: { "content-type": "application/json", "x-cooper-signature": signature } });
+  const login = await app.inject({ method: "POST", url: "/api/auth/login", payload: { email: "admin@example.ca", password: "secure-demo-password" } });
+  const response = await app.inject({ method: "GET", url: "/api/reports/calls", headers: { cookie: cookie(login) } });
+  assert.equal(response.statusCode, 200);
+  assert.equal(response.json().reports.length, 1);
+  assert.equal(response.json().reports[0].call.dograhRunId, "run-42");
+  await app.close();
+});
+
 test("supervisor injection requires an authenticated CSRF-protected session", async () => {
   const app = await setup(); const payload = JSON.stringify(event()); const signature = `sha256=${hmacSha256(config.DOGRAH_EVENT_SECRET, payload)}`;
   await app.inject({ method: "POST", url: "/internal/dograh/events", payload, headers: { "content-type": "application/json", "x-cooper-signature": signature } });

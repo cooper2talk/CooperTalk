@@ -107,6 +107,15 @@ export async function createApp(repo: Repository, config: Config, overrides: Dep
 
   app.get("/api/calls", async (request) => { await requireUser(request); return { calls: await repo.listCalls() }; });
   app.get("/api/calls/:callId", async (request) => { await requireUser(request); const call = await getCall((request.params as any).callId); return { call, transcript: await repo.listTranscript(call.id), outbound: await repo.listOutboundForCall(call.id) }; });
+  app.get("/api/reports/calls", async (request) => {
+    await requireUser(request);
+    const calls = await repo.listCalls();
+    const reports = await Promise.all(calls.map(async (call) => {
+      const summary = (await repo.listOutboundForCall(call.id)).find((message) => message.kind === "whatsapp_summary")?.body as { summary?: unknown } | undefined;
+      return { call, summary: summary?.summary };
+    }));
+    return { reports };
+  });
   app.post("/api/calls/:callId/injections", async (request) => {
     const p = await requireUser(request, ["admin", "supervisor"]); const call = await getCall((request.params as any).callId); if (call.status !== "active") fail(409, "Call is not active");
     const injectionBody = typeof request.body === "string" ? JSON.parse(request.body) : request.body;
