@@ -23,3 +23,5 @@ services:
       - /opt/dograh/api/services/pipecat/cooper_companion_profiles.py:/app/api/services/pipecat/cooper_companion_profiles.py:ro
       - /opt/dograh/api/services/workflow/pipecat_engine.py:/app/api/services/workflow/pipecat_engine.py:ro
       - /opt/dograh/api/services/telephony/providers/telnyx/provider.py:/app/api/services/telephony/providers/telnyx/provider.py:ro
+      - /opt/dograh/api/services/configuration/managed_env.py:/app/api/services/configuration/managed_env.py:ro
+      - /opt/dograh/api/services/configuration/ai_model_configuration.py:/app/api/services/configuration/ai_model_configuration.py:ro
