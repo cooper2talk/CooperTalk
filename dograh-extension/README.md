@@ -49,6 +49,34 @@ It adds the executing workflow ID and workflow name to signed Cooper2Talk call
 events so the operator console distinguishes separate receptionists sharing the
 same Telnyx provider.
 
+Apply `companion-profiles-v1.45.0.patch` after the event and instruction
+patches to enable caller-specific companion profiles. The profile is selected
+from the inbound E.164 caller ID before the greeting, speech-to-text, or
+text-to-speech service is created. It therefore cannot affect unrelated calls.
+The Punjabi companion profile uses Deepgram `nova-3` with `pa-IN` and Google
+Chirp 3 HD's female `pa-IN-Chirp3-HD-Kore` voice. It also adds per-call prompt
+rules for Punjabi-first, turn-by-turn language matching, a friendly companion
+mode, feminine grammar, English digit pronunciation, and privacy boundaries.
+
+Set `COOPER_COMPANION_PROFILES` only in Dograh's private runtime environment.
+Its JSON value is a map from a trusted caller's E.164 number to their profile:
+
+```json
+{
+  "+1XXXXXXXXXX": {
+    "name": "Trusted caller",
+    "sttLanguage": "pa-IN",
+    "sttModel": "nova-3",
+    "ttsLanguage": "pa-IN",
+    "ttsModel": "chirp_3_hd",
+    "ttsVoice": "pa-IN-Chirp3-HD-Kore"
+  }
+}
+```
+
+The caller-ID match personalises a call; it is not authentication. Do not add
+private-data permissions to a profile without a separate verification step.
+
 The current deployment uses Dograh's native Google Chirp 3 HD TTS service with
 the fixed female `en-US-Chirp3-HD-Aoede` voice. The retained Rumik patch is
 kept only as a pinned rollback option; Rumik is not the active voice provider.

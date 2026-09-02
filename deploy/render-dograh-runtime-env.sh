@@ -35,6 +35,10 @@ put_secret RUMIK_API_KEY cooper-rumik-api-key
 put_secret TWILIO_ACCOUNT_SID cooper-twilio-account-sid
 put_secret TWILIO_AUTH_TOKEN cooper-twilio-auth-token
 
+if gcloud secrets versions access latest --secret=cooper-companion-profiles >/dev/null 2>&1; then
+  put_secret COOPER_COMPANION_PROFILES cooper-companion-profiles
+fi
+
 if gcloud secrets versions access latest --secret=cooper-telnyx-api-key >/dev/null 2>&1; then
   put_secret TELNYX_API_KEY cooper-telnyx-api-key
 fi
