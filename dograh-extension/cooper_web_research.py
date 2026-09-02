@@ -11,6 +11,7 @@ import os
 from typing import Any
 
 import aiohttp
+from loguru import logger
 from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.services.llm_service import FunctionCallParams
 
@@ -25,10 +26,12 @@ def web_research_schema() -> FunctionSchema:
     return FunctionSchema(
         name="cooper_web_research",
         description=(
-            "Research a factual question using live internet sources. "
-            "Use this before answering any question where current or "
-            "verifiable information would help. Do not use it for casual "
-            "conversation, personal data, or private Cooper2Talk information."
+            "MANDATORY for public information that is current, changeable, "
+            "or needs verification: news, weather, time, dates, sports, "
+            "prices, travel, events, public people, recommendations, and "
+            "factual lookups. Research the caller's request using live internet "
+            "sources before replying. Do not use this for casual conversation, "
+            "personal data, or private Cooper2Talk information."
         ),
         properties={
             "query": {
@@ -115,6 +118,7 @@ async def research(function_call_params: FunctionCallParams) -> None:
             ) as response:
                 response_body = await response.json(content_type=None)
                 if response.status >= 300:
+                    logger.warning("Cooper live web research request failed with status {}", response.status)
                     await function_call_params.result_callback(
                         {
                             "error": "Live web research is temporarily unavailable.",
@@ -123,6 +127,7 @@ async def research(function_call_params: FunctionCallParams) -> None:
                     )
                     return
     except (aiohttp.ClientError, TimeoutError, ValueError):
+        logger.warning("Cooper live web research request failed before a response")
         await function_call_params.result_callback(
             {"error": "Live web research is temporarily unavailable."}
         )
@@ -133,11 +138,13 @@ async def research(function_call_params: FunctionCallParams) -> None:
     message = first_choice.get("message") if isinstance(first_choice, dict) else None
     answer = message.get("content") if isinstance(message, dict) else None
     if not isinstance(answer, str) or not answer.strip():
+        logger.warning("Cooper live web research returned no usable answer")
         await function_call_params.result_callback(
             {"error": "Live web research returned no usable answer."}
         )
         return
 
+    logger.info("Cooper live web research request completed")
     await function_call_params.result_callback(
         {
             "answer": answer.strip()[:_MAX_ANSWER_LENGTH],
