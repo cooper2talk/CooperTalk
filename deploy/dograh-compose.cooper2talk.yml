@@ -21,6 +21,7 @@ services:
       - /opt/dograh/api/services/pipecat/cooper_events.py:/app/api/services/pipecat/cooper_events.py:ro
       - /opt/dograh/api/services/pipecat/operator_instructions.py:/app/api/services/pipecat/operator_instructions.py:ro
       - /opt/dograh/api/services/pipecat/cooper_companion_profiles.py:/app/api/services/pipecat/cooper_companion_profiles.py:ro
+      - /opt/dograh/api/services/pipecat/cooper_web_research.py:/app/api/services/pipecat/cooper_web_research.py:ro
       - /opt/dograh/api/services/workflow/pipecat_engine.py:/app/api/services/workflow/pipecat_engine.py:ro
       - /opt/dograh/api/services/telephony/providers/telnyx/provider.py:/app/api/services/telephony/providers/telnyx/provider.py:ro
       - /opt/dograh/api/services/configuration/managed_env.py:/app/api/services/configuration/managed_env.py:ro
