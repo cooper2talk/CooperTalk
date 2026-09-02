@@ -30,7 +30,9 @@ put_secret() {
 
 put_secret DEEPGRAM_API_KEY cooper-deepgram-api-key
 put_secret GROQ_API_KEY cooper-groq-api-key
-put_secret GROQ_EXCELLINX_API_KEY excellinx-assistant
+if gcloud secrets versions access latest --secret=excellinx-assistant >/dev/null 2>&1; then
+  put_secret GROQ_EXCELLINX_API_KEY excellinx-assistant
+fi
 put_secret RUMIK_API_KEY cooper-rumik-api-key
 put_secret TWILIO_ACCOUNT_SID cooper-twilio-account-sid
 put_secret TWILIO_AUTH_TOKEN cooper-twilio-auth-token
