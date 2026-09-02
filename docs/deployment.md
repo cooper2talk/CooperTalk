@@ -64,3 +64,33 @@ curl -fsS https://34-130-230-27.sslip.io/health
 ```
 
 `POSTGRES_PASSWORD` must be URL-safe because it is inserted into the container database URL. Generate a long value containing letters, numbers, hyphens, and underscores only.
+
+## Meenakshi Punjabi companion profile
+
+The caller-specific Punjabi route is part of the pinned Dograh extension; it
+does not change Emma for other callers. Create the private GCP secret once,
+then grant the VM runtime service account access if it does not already have
+the same Secret Manager access as the existing Cooper secrets:
+
+```bash
+printf '%s' '{"+1XXXXXXXXXX":{"name":"Trusted caller","sttLanguage":"pa-IN","sttModel":"nova-3","ttsLanguage":"pa-IN","ttsModel":"chirp_3_hd","ttsVoice":"pa-IN-Chirp3-HD-Kore"}}' \
+  | gcloud secrets create cooper-companion-profiles --data-file=-
+```
+
+For later edits, use `gcloud secrets versions add cooper-companion-profiles
+--data-file=-` instead of creating a second secret. On the VM, apply the
+extension to the existing pinned Dograh checkout, refresh its private runtime
+environment, and rebuild the Dograh API service using the same compose command
+used for Dograh's current deployment:
+
+```bash
+cd /opt/cooper2talk
+bash deploy/apply-dograh-companion-profiles.sh /opt/dograh
+bash deploy/render-dograh-runtime-env.sh
+```
+
+The extension detects the incoming E.164 caller ID before Emma's greeting. For
+that profile it uses Deepgram `nova-3` / `pa-IN` and Google `pa-IN-Chirp3-HD-Kore`,
+then gives Emma Punjabi-first, language-matching companion instructions. The
+caller-ID match is not authentication, so it still cannot unlock Surinder's
+private data.

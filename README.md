@@ -35,3 +35,13 @@ remains the desktop fallback.
 After a completed call to Emma's routed number (`+1 705 300 4321`), Cooper queues one call-close WhatsApp summary for the configured operator. The summary follows the caller's language: Hinglish/Hindi calls receive a Hinglish update and English calls receive an English update. If Groq is rate-limited, Cooper safely sends the latest caller statements instead of delaying the completed call.
 
 Before enabling production delivery, create and approve the Meta template `cooper_call_summary` with four body parameters: caller, duration, update, and urgency. Set the Meta sender secrets in GCP Secret Manager using the existing `cooper-whatsapp-*` secret names, then re-render the runtime environment and restart the Cooper API. Missing sender credentials or an unapproved template is shown as a real outbox delivery error; it is never simulated as delivered.
+
+## Punjabi companion profile
+
+Emma can use a per-caller companion profile without affecting other callers.
+The reviewed Dograh extension selects a configured caller ID at call startup,
+switches to Punjabi Deepgram STT and a female Punjabi Google
+Chirp 3 HD voice, and adds Punjabi-first, language-matching conversation rules.
+It intentionally remains a caller-ID personalisation rule, not a way to access
+Surinder's private information. The private configuration and rollout steps are
+in [`docs/deployment.md`](docs/deployment.md).
