@@ -83,6 +83,11 @@ hooks through stable Dograh source markers. This accommodates the existing
 Cooper modifications in a deployed Dograh tree; the patch remains available
 for review and clean-source installations.
 
+The installer also ensures Dograh's Telnyx provider resolves the
+`cooper2talk-managed` database marker from `TELNYX_API_KEY` only at runtime.
+This is required for inbound Telnyx calls to answer without storing the real
+Telnyx key in Dograh's database.
+
 The current deployment uses Dograh's native Google Chirp 3 HD TTS service with
 the fixed female `en-US-Chirp3-HD-Aoede` voice. The retained Rumik patch is
 kept only as a pinned rollback option; Rumik is not the active voice provider.

@@ -34,6 +34,7 @@ import sys
 root = Path(sys.argv[1])
 pipeline_path = root / "api/services/pipecat/run_pipeline.py"
 engine_path = root / "api/services/workflow/pipecat_engine.py"
+telnyx_path = root / "api/services/telephony/providers/telnyx/provider.py"
 
 profile_import = "from api.services.pipecat.cooper_companion_profiles import apply_companion_profile\n"
 profile_call = """    # Caller profile selection is deliberately before STT/TTS construction so
@@ -48,6 +49,11 @@ prompt_call = """        companion_instructions = self._call_context_vars.get(
         )
         if isinstance(companion_instructions, str) and companion_instructions.strip():
             system_prompt = f\"{system_prompt}\\n\\n{companion_instructions.strip()}\"
+"""
+telnyx_resolver = """        if self.api_key == "cooper2talk-managed":
+            self.api_key = os.getenv("TELNYX_API_KEY")
+        if not self.api_key:
+            logger.warning("Telnyx API key is not configured")
 """
 
 def write_if_changed(path: Path, value: str) -> None:
@@ -75,11 +81,24 @@ if "cooper_companion_instructions" not in engine:
         raise SystemExit(f"Unsupported Dograh PipecatEngine layout: {engine_path}")
     engine = engine.replace(functions_marker, prompt_call + functions_marker, 1)
 
+# Dograh stores the safe marker in PostgreSQL. Resolve it only inside the
+# running service so the real Telnyx key never enters Dograh's database.
+telnyx = telnyx_path.read_text(encoding="utf-8")
+if "cooper2talk-managed" not in telnyx:
+    json_import = "import json\n"
+    constructor_marker = "        self.api_key = config.get(\"api_key\")\n"
+    if json_import not in telnyx or constructor_marker not in telnyx:
+        raise SystemExit(f"Unsupported Dograh Telnyx provider layout: {telnyx_path}")
+    telnyx = telnyx.replace(json_import, json_import + "import os\n", 1)
+    telnyx = telnyx.replace(constructor_marker, constructor_marker + telnyx_resolver, 1)
+
 compile(pipeline, str(pipeline_path), "exec")
 compile(engine, str(engine_path), "exec")
+compile(telnyx, str(telnyx_path), "exec")
 write_if_changed(pipeline_path, pipeline)
 write_if_changed(engine_path, engine)
+write_if_changed(telnyx_path, telnyx)
 PY
 
 python3 -m py_compile "$dograh_root/api/services/pipecat/cooper_companion_profiles.py"
-echo "Applied Dograh companion-profile extension. Rebuild the Dograh API service before testing a call."
+echo "Applied Dograh companion and Telnyx managed-secret extensions. Rebuild the Dograh API service before testing a call."
