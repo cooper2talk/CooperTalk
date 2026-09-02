@@ -89,6 +89,14 @@ sudo bash deploy/apply-dograh-companion-profiles.sh /opt/dograh
 sudo -E bash deploy/render-dograh-runtime-env.sh
 ```
 
+Start Dograh with its Cooper override so the private profile variable reaches
+the API container:
+
+```bash
+cd /opt/dograh
+sudo docker compose -f docker-compose.yml -f /opt/cooper2talk/deploy/dograh-compose.cooper2talk.yml up -d --build
+```
+
 The extension detects the incoming E.164 caller ID before Emma's greeting. For
 that profile it uses Deepgram `nova-3` / `pa-IN` and Google `pa-IN-Chirp3-HD-Kore`,
 then gives Emma Punjabi-first, language-matching companion instructions. The
