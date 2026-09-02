@@ -11,12 +11,15 @@ services:
       COOPER_EVENT_URL: "${COOPER_EVENT_URL:-}"
       COOPER_EVENT_SECRET: "${COOPER_EVENT_SECRET:-}"
       COOPER_COMPANION_PROFILES: "${COOPER_COMPANION_PROFILES:-}"
-    # Dograh's production compose uses the published dograh-api image rather
-    # than building from /opt/dograh. Mount the patched Pipecat package as one
-    # unit: its run pipeline imports Cooper event/instruction helpers that are
-    # intentionally not present in the upstream image. The installer writes
-    # the companion module before this service is recreated.
+    # Keep the published image's service factory (which has no legacy Rumik
+    # dependency), while mounting only Cooper's event, instruction, caller
+    # profile, and Telnyx resolver code.
     volumes:
-      - /opt/dograh/api/services/pipecat:/app/api/services/pipecat:ro
+      - /opt/dograh/api/services/pipecat/run_pipeline.py:/app/api/services/pipecat/run_pipeline.py:ro
+      - /opt/dograh/api/services/pipecat/event_handlers.py:/app/api/services/pipecat/event_handlers.py:ro
+      - /opt/dograh/api/services/pipecat/transcript_log_coordinator.py:/app/api/services/pipecat/transcript_log_coordinator.py:ro
+      - /opt/dograh/api/services/pipecat/cooper_events.py:/app/api/services/pipecat/cooper_events.py:ro
+      - /opt/dograh/api/services/pipecat/operator_instructions.py:/app/api/services/pipecat/operator_instructions.py:ro
+      - /opt/dograh/api/services/pipecat/cooper_companion_profiles.py:/app/api/services/pipecat/cooper_companion_profiles.py:ro
       - /opt/dograh/api/services/workflow/pipecat_engine.py:/app/api/services/workflow/pipecat_engine.py:ro
       - /opt/dograh/api/services/telephony/providers/telnyx/provider.py:/app/api/services/telephony/providers/telnyx/provider.py:ro
