@@ -94,7 +94,7 @@ the API container:
 
 ```bash
 cd /opt/dograh
-sudo docker compose -f docker-compose.yml -f /opt/cooper2talk/deploy/dograh-compose.cooper2talk.yml up -d --build
+sudo docker compose -f docker-compose.yaml -f /opt/cooper2talk/deploy/dograh-compose.cooper2talk.yml up -d --build
 ```
 
 The extension detects the incoming E.164 caller ID before Emma's greeting. For
