@@ -77,6 +77,12 @@ Its JSON value is a map from a trusted caller's E.164 number to their profile:
 The caller-ID match personalises a call; it is not authentication. Do not add
 private-data permissions to a profile without a separate verification step.
 
+`deploy/apply-dograh-companion-profiles.sh` is the recommended production
+installer. It copies the reviewed Python module and adds the three required
+hooks through stable Dograh source markers. This accommodates the existing
+Cooper modifications in a deployed Dograh tree; the patch remains available
+for review and clean-source installations.
+
 The current deployment uses Dograh's native Google Chirp 3 HD TTS service with
 the fixed female `en-US-Chirp3-HD-Aoede` voice. The retained Rumik patch is
 kept only as a pinned rollback option; Rumik is not the active voice provider.

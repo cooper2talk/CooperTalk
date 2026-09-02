@@ -1,4 +1,5 @@
 diff --git a/api/services/pipecat/run_pipeline.py b/api/services/pipecat/run_pipeline.py
+index 912835545dd79fb72929da1f2de606f0cf449079..fa9ef54f2484aca2cd45517f7ee0b6bd2468a394 100644
 --- a/api/services/pipecat/run_pipeline.py
 +++ b/api/services/pipecat/run_pipeline.py
 @@ -28,6 +28,7 @@ from api.services.observability.active_calls import (
@@ -23,6 +24,7 @@ diff --git a/api/services/pipecat/run_pipeline.py b/api/services/pipecat/run_pip
          ReactFlowDTO.model_validate(run_workflow_json),
          skip_instance_constraints_for={"trigger"},
 diff --git a/api/services/workflow/pipecat_engine.py b/api/services/workflow/pipecat_engine.py
+index 85ad3ceb3e5f2715a43f8b3a1b643abe6d033e32..fd3ff89c473ea9ad292334fd54a06284ce512212 100644
 --- a/api/services/workflow/pipecat_engine.py
 +++ b/api/services/workflow/pipecat_engine.py
 @@ -605,6 +605,11 @@ class PipecatEngine:

@@ -85,8 +85,8 @@ used for Dograh's current deployment:
 
 ```bash
 cd /opt/cooper2talk
-bash deploy/apply-dograh-companion-profiles.sh /opt/dograh
-bash deploy/render-dograh-runtime-env.sh
+sudo bash deploy/apply-dograh-companion-profiles.sh /opt/dograh
+sudo -E bash deploy/render-dograh-runtime-env.sh
 ```
 
 The extension detects the incoming E.164 caller ID before Emma's greeting. For
