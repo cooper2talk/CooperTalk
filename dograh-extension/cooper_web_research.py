@@ -78,7 +78,13 @@ async def research(function_call_params: FunctionCallParams) -> None:
         await function_call_params.result_callback({"error": "A search question is required."})
         return
 
-    api_key = os.getenv("GROQ_API_KEY", "").strip()
+    # Keep live research off the conversational model's capacity when the
+    # separately managed ExcelLinx Groq credential is available. The fallback
+    # preserves the current single-key installation without exposing either
+    # credential to source code or logs.
+    api_key = os.getenv("GROQ_EXCELLINX_API_KEY", "").strip() or os.getenv(
+        "GROQ_API_KEY", ""
+    ).strip()
     if not api_key:
         await function_call_params.result_callback(
             {"error": "Live web research is not configured right now."}
