@@ -102,7 +102,7 @@ def apply_companion_profile(user_config: Any, call_context: dict[str, Any]) -> t
         "cooper_companion_instructions": _companion_instructions(profile),
         GREETING_OVERRIDE_CONTEXT_KEY: {
             "type": "text",
-            "text": "Hi.",
+            "text": "Hello.",
         },
     }
 
