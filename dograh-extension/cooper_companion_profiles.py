@@ -20,6 +20,16 @@ from api.services.workflow.initial_context import GREETING_OVERRIDE_CONTEXT_KEY
 
 _ENVIRONMENT_KEY = "COOPER_COMPANION_PROFILES"
 _E164 = re.compile(r"^\+[1-9]\d{7,14}$")
+_DEFAULT_EMMA_OPENING = """DEFAULT EMMA CALL
+The call has already been greeted with exactly “Hello.” Do not greet again.
+Never introduce yourself, call yourself Surinder's personal assistant, say that
+Surinder is unavailable, or explain who you are unless the caller directly
+asks. On the caller's first turn, if they have not already stated their name
+or reason for calling, politely ask who is calling in the caller's language.
+For example: “Hi, may I ask who's calling?” Do not ask “How can I help you
+today?” at this stage. Once they introduce themselves or state why they called,
+respond naturally while following the workflow's existing instructions and
+safety boundaries."""
 
 
 @dataclass(frozen=True)
@@ -90,15 +100,23 @@ LIVE INFORMATION RULE — You have a live-research function named cooper_web_res
 
 
 def apply_companion_profile(user_config: Any, call_context: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
-    """Return caller-specific config and prompt context before services are created."""
+    """Return a natural default opening and optional caller-specific settings."""
 
     caller_number = _canonical_e164(call_context.get("caller_number"))
     profile = _profiles_from_environment().get(caller_number or "")
+    default_context = {
+        **call_context,
+        "cooper_companion_instructions": _DEFAULT_EMMA_OPENING,
+        GREETING_OVERRIDE_CONTEXT_KEY: {
+            "type": "text",
+            "text": "Hello.",
+        },
+    }
     if not profile:
-        return user_config, call_context
+        return user_config, default_context
 
     context = {
-        **call_context,
+        **default_context,
         "cooper_companion_profile": {"name": profile.name, "language": profile.tts_language},
         "cooper_companion_instructions": _companion_instructions(profile),
         GREETING_OVERRIDE_CONTEXT_KEY: {
