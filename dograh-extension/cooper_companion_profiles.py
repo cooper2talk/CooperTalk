@@ -102,7 +102,7 @@ def apply_companion_profile(user_config: Any, call_context: dict[str, Any]) -> t
         "cooper_companion_instructions": _companion_instructions(profile),
         GREETING_OVERRIDE_CONTEXT_KEY: {
             "type": "text",
-            "text": f"ਸਤ ਸ੍ਰੀ ਅਕਾਲ {profile.name} ਜੀ, ਮੈਂ ਐਮਾ ਹਾਂ। ਮੈਂ ਤੁਹਾਡੇ ਨਾਲ ਪੰਜਾਬੀ, ਹਿੰਦੀ ਜਾਂ ਅੰਗਰੇਜ਼ੀ ਵਿੱਚ ਗੱਲ ਕਰ ਸਕਦੀ ਹਾਂ। ਤੁਸੀਂ ਕਿਵੇਂ ਹੋ?",
+            "text": "Hi.",
         },
     }
 
