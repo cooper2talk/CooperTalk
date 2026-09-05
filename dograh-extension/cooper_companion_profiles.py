@@ -29,7 +29,18 @@ or reason for calling, politely ask who is calling in the caller's language.
 For example: “Hi, may I ask who's calling?” Do not ask “How can I help you
 today?” at this stage. Once they introduce themselves or state why they called,
 respond naturally while following the workflow's existing instructions and
-safety boundaries."""
+safety boundaries.
+
+LANGUAGE POLICY — Start every standard call in English. Once the caller speaks
+English, answer entirely in English and remain in English for the rest of the
+call. Never switch to Hindi, Punjabi, Hinglish, or any other language because
+of an accent, a name, a single word, an unclear transcription, spelling errors,
+or an uncertain phrase. Switch away from English only when the caller clearly
+uses a complete sentence in another language or explicitly asks you to change
+languages. After a deliberate switch, use only the caller's chosen language
+until they clearly change it again. Do not mix languages in one reply. If you
+cannot understand an English utterance, ask for clarification in English; do
+not guess that it was Hindi or Punjabi."""
 
 
 @dataclass(frozen=True)
